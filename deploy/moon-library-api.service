@@ -1,0 +1,19 @@
+# systemd unit for the Moon Library backend (Gunicorn). Copy to /etc/systemd/system/, adjust paths/user, then:
+#   sudo systemctl daemon-reload && sudo systemctl enable --now moon-library-api
+[Unit]
+Description=Moon Library backend (Flask + Gunicorn)
+After=network.target mysql.service
+
+[Service]
+User=moonlibrary
+Group=moonlibrary
+WorkingDirectory=/home/moonlibrary/htdocs/moon-library-api
+# .env is read by the app itself; nothing secret is written in this file
+ExecStart=/home/moonlibrary/htdocs/moon-library-api/.venv/bin/gunicorn -c deploy/gunicorn.conf.py wsgi:app
+Restart=always
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=40
+
+[Install]
+WantedBy=multi-user.target

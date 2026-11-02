@@ -1,0 +1,21 @@
+# secrets
+.env
+.env.*
+!.env.example
+*.json.key
+service-account*.json
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+# admin build output and packages
+admin/node_modules/
+admin/dist/
+# logs
+logs/
+*.log
+*.tsbuildinfo
+.ruff_cache/
+# the replaced Apple/Shopify admin design, kept in case it is wanted again
+.backup/

@@ -1,0 +1,15 @@
+# crontab for the app user (crontab -e). Paths, log folder and lock file belong to THIS project only.
+APP=/home/moonlibrary/htdocs/moon-library-api
+LOGS=/home/moonlibrary/logs
+BACKUPS=/home/moonlibrary/backups
+
+# Google Drive backup of file originals, every 5 minutes (only when GDRIVE_* is set; otherwise it exits at once).
+# flock: a run still going when the next one starts makes the new one exit.
+*/5 * * * * cd $APP && flock -n /tmp/moon-library-drive-backup.lock .venv/bin/flask --app wsgi backup run --budget 240 >> $LOGS/drive-backup.log 2>&1
+
+# Trash and old versions older than 90 days, every night.
+17 3 * * * cd $APP && .venv/bin/flask --app wsgi cleanup >> $LOGS/cleanup.log 2>&1
+
+# MySQL backup, every night (the Drive backup copies files only; it can't rebuild the database).
+# Keep the dumps somewhere else too, and practise restoring one.
+40 2 * * * mysqldump --single-transaction --routines moon_library | gzip > $BACKUPS/moon_library-$(date +\%F).sql.gz
