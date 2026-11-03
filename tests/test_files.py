@@ -95,7 +95,9 @@ def test_move_rules(owner):
     g = folder(owner, "B", f)
     i = item(owner, f)
     assert op(owner, "move", {"folderIds": [f], "targetId": g}, status=400)["error"] == "A folder can't be moved into itself"
-    assert op(owner, "move", {"itemIds": [i], "targetId": None}, status=400)["error"] == "Files have to be inside a folder"
+    op(owner, "move", {"itemIds": [i], "targetId": None})  # files moved to the Library itself go into "Unsorted"
+    loose = owner.get("/api/admin/tree").get_json()["looseFolderId"]
+    assert sql(owner.application, "SELECT folder_id FROM items WHERE id = ?", i)[0]["folder_id"] == loose
     h = folder(owner, "B")  # same name at the top → its link name gets "-2" when moved next to another "b"
     op(owner, "move", {"folderIds": [h], "targetId": f})
     assert sql(owner.application, "SELECT slug FROM folders WHERE id = ?", h)[0]["slug"] == "b-2"
@@ -286,7 +288,7 @@ def test_copy_paste_and_duplicate(owner, client):
     t = owner.get("/api/admin/tree").get_json()
     assert next(x for x in t["items"] if x["id"] == c["itemIds"][0])["title"] == {"en": "Game Rebate (copy)"}
     # cards need a folder; nothing to copy is refused
-    op(owner, "copy.start", {"folderIds": [], "itemIds": [i], "targetId": None}, status=400)
+    op(owner, "copy.start", {"folderIds": [], "itemIds": [i], "targetId": None})  # pasted into the Library: goes to "Unsorted"
     op(owner, "copy.start", {"folderIds": [], "itemIds": [], "targetId": sub}, status=400)
 
     # deleting the copies for good leaves the original's files alone

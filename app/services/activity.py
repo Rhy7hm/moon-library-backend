@@ -36,7 +36,7 @@ NEED = {
 }
 
 QUIET = {
-    "copy.files", "file.create", "item.create", "mpu.create", "mpu.complete", "mpu.abort", "file.setopt", "folder.iconImage", "audit.list",
+    "copy.files", "file.create", "item.create", "folder.loose", "mpu.create", "mpu.complete", "mpu.abort", "file.setopt", "folder.iconImage", "audit.list",
     "versions.list", "reports.team", "reports.storage", "settings.get", "users.list", "clients.list",
 }
 

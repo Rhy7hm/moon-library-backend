@@ -22,7 +22,7 @@ from flask import Blueprint, Response, current_app, redirect, request
 
 from ..auth import check_origin, get_user, require_user, write_log
 from ..services import activity
-from ..services.admin_ops import OPS, Ctx, check_key, http_meta
+from ..services.admin_ops import OPS, Ctx, check_key, http_meta, loose_folder_id
 from ..services.library import load_library
 from ..services.client_ops import CLIENT_OPS
 from ..services.manage_ops import MANAGE_OPS, pins_of
@@ -48,6 +48,7 @@ def admin_get(op: str):
         log.exception("cleanup")
     data = load_library(asset_base=current_app.config["ASSET_BASE"])
     data["user"] = {"id": user.id, "username": user.username, "name": user.name, "role": user.role, "pins": pins_of(user.id)}
+    data["looseFolderId"] = loose_folder_id()  # "Unsorted": shown as files at the top of the Library
     return json_response(data, headers={"Cache-Control": "no-store"})
 
 

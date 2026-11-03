@@ -55,7 +55,7 @@ export type Folder = {
 };
 
 export type Tag = { id: string; name: string; color: string | null };
-export type Tree = { folders: Folder[]; items: Asset[]; tags?: Tag[]; user: Me & { pins?: string[] } };
+export type Tree = { folders: Folder[]; items: Asset[]; tags?: Tag[]; user: Me & { pins?: string[] }; looseFolderId?: string | null };
 
 export type Share = { id: string; kind: 'folder' | 'item' | 'link'; targetId: string | null; url: string | null; title: string | null; createdAt: number; createdBy: string | null; expiresAt?: number | null };
 export type ClientLogin = { id: string; email: string; name: string; disabled: boolean; lastLoginAt: number | null; createdAt: number };

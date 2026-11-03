@@ -16,14 +16,89 @@ export function Button({
   kind = 'secondary',
   size,
   icon,
+  reveal,
   ...rest
-}: { kind?: 'primary' | 'secondary' | 'plain' | 'danger'; size?: 'sm'; icon?: ReactNode } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
+}: { kind?: 'primary' | 'secondary' | 'plain' | 'danger'; size?: 'sm'; icon?: ReactNode; reveal?: boolean } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  // reveal: just the icon until hovered or focused, then the label slides out
   return (
-    <button type="button" className={`btn ${kind}${size ? ' ' + size : ''}${children ? '' : ' icon-only'}`} {...rest}>
+    <button type="button" className={`btn ${kind}${size ? ' ' + size : ''}${children ? '' : ' icon-only'}${reveal && children ? ' reveal' : ''}`} {...rest}>
       {icon}
       {children && <span>{children}</span>}
     </button>
   );
+}
+
+/* ---------------- moving by drag and drop ---------------- */
+// Drag file cards and folder tiles onto a folder (tile, sidebar row or path crumb) to move them there.
+
+const DRAG_TYPE = 'application/x-moonlib-move';
+export type DragLoad = { items: string[]; folders: string[] };
+
+export function startDrag(e: React.DragEvent, load: DragLoad) {
+  e.dataTransfer.setData(DRAG_TYPE, JSON.stringify(load));
+  e.dataTransfer.effectAllowed = 'move';
+  const n = load.items.length + load.folders.length;
+  const what = !load.folders.length ? 'file' : !load.items.length ? 'folder' : 'item';
+  // a small "3 files" pill under the pointer instead of a ghost of the whole card
+  const ghost = document.createElement('div');
+  ghost.className = 'drag-ghost';
+  ghost.textContent = `${n} ${what}${n === 1 ? '' : 's'}`;
+  document.body.appendChild(ghost);
+  e.dataTransfer.setDragImage(ghost, 14, 14);
+  setTimeout(() => ghost.remove(), 0);
+  document.body.classList.add('is-moving');
+}
+export const endDrag = () => document.body.classList.remove('is-moving');
+
+/** Props that make an element a place to drop dragged files and folders; target null = the Library itself. */
+export function useMoveDrop(target: string | null, label: string) {
+  const s = useStore();
+  const [over, setOver] = useState(false);
+  const depth = useRef(0);
+  if (!s.canEdit) return { over: false, dropProps: {} };
+  const has = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes(DRAG_TYPE);
+  const dropProps = {
+    onDragEnter: (e: React.DragEvent) => {
+      if (!has(e)) return;
+      e.preventDefault();
+      depth.current++;
+      setOver(true);
+    },
+    onDragOver: (e: React.DragEvent) => {
+      if (!has(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+    },
+    onDragLeave: (e: React.DragEvent) => {
+      if (!has(e)) return;
+      depth.current = Math.max(0, depth.current - 1);
+      if (!depth.current) setOver(false);
+    },
+    onDrop: (e: React.DragEvent) => {
+      if (!has(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      depth.current = 0;
+      setOver(false);
+      endDrag();
+      let load: DragLoad;
+      try {
+        load = JSON.parse(e.dataTransfer.getData(DRAG_TYPE));
+      } catch {
+        return;
+      }
+      const above = new Set(s.path(target).map((f) => f.id));
+      // leave out what's already there, and a folder dropped on itself or on a folder inside it
+      const folders = (load.folders ?? []).filter((id) => id !== target && !above.has(id) && (s.byId.get(id)?.parentId ?? null) !== target);
+      const here = target ?? s.looseFolderId;
+      const items = (load.items ?? []).filter((id) => s.assets.find((a) => a.id === id)?.folderId !== here);
+      const n = folders.length + items.length;
+      if (!n) return;
+      const what = !folders.length ? 'file' : !items.length ? 'folder' : 'item';
+      void s.run('move', { itemIds: items, folderIds: folders, targetId: target }, `Moved ${n} ${what}${n === 1 ? '' : 's'} to “${label}”`);
+    },
+  };
+  return { over, dropProps };
 }
 
 /** Staff avatar: photo when set, otherwise the first letter of the name. */
@@ -193,13 +268,19 @@ export function MenuButton({ items, label = 'More', icon = <IMore />, align = 'r
 /* ---------------- dialogs ---------------- */
 
 export function Dialog({ title, children, onClose, footer, wide }: { title: string; children: ReactNode; onClose: () => void; footer?: ReactNode; wide?: boolean }) {
+  const scrim = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const esc = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    // with a dialog opened from inside another, Escape closes only the top one
+    const esc = (e: KeyboardEvent) => {
+      const all = document.querySelectorAll('.scrim');
+      if (e.key === 'Escape' && all[all.length - 1] === scrim.current) onClose();
+    };
     document.addEventListener('keydown', esc);
     return () => document.removeEventListener('keydown', esc);
   }, [onClose]);
-  return (
-    <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+  // on <body>, so a dialog opened from inside another isn't trapped in its box
+  return createPortal(
+    <div className="scrim" ref={scrim} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className={`dialog${wide ? ' wide' : ''}`} role="dialog" aria-modal aria-label={title}>
         <header>
           <h2>{title}</h2>
@@ -210,7 +291,8 @@ export function Dialog({ title, children, onClose, footer, wide }: { title: stri
         <div className="dialog-body">{children}</div>
         {footer && <footer>{footer}</footer>}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -259,7 +341,9 @@ export function ConfirmDialog({ title, text, action, danger, onConfirm, onClose 
 }
 
 /** Pick a destination folder (folders being moved and their insides can't be chosen). */
-export function FolderPicker({ title, exclude = [], onPick, onClose }: { title: string; exclude?: string[]; onPick: (id: string) => void; onClose: () => void }) {
+const TOP = '__library__'; // the Library itself, as a choice in the folder picker
+
+export function FolderPicker({ title, exclude = [], onPick, onClose }: { title: string; exclude?: string[]; onPick: (id: string | null) => void; onClose: () => void }) {
   const { children: kids } = useStore();
   const [sel, setSel] = useState<string | null>(null);
   const blocked = new Set(exclude);
@@ -283,13 +367,18 @@ export function FolderPicker({ title, exclude = [], onPick, onClose }: { title: 
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button kind="primary" disabled={!sel} onClick={() => sel && onPick(sel)}>
+          <Button kind="primary" disabled={!sel} onClick={() => sel && onPick(sel === TOP ? null : sel)}>
             Move here
           </Button>
         </>
       }
     >
       <div className="pick-list">
+        <button type="button" className={`pick-row${sel === TOP ? ' on' : ''}`} style={{ paddingLeft: 12 }} onClick={() => setSel(TOP)}>
+          <IFolder />
+          <span>Library (not in a folder)</span>
+          {sel === TOP && <ICheck className="pick-check" />}
+        </button>
         {kids(null).map((f) => (
           <Row key={f.id} f={f} depth={0} />
         ))}
@@ -409,6 +498,7 @@ export function AssetCard({
   onOpen,
   menu,
   where,
+  onDragStart,
 }: {
   asset: Asset;
   selected: boolean;
@@ -417,6 +507,8 @@ export function AssetCard({
   onOpen: () => void;
   menu: MenuItem[];
   where?: string;
+  /** set to let the card be dragged onto a folder */
+  onDragStart?: (e: React.DragEvent) => void;
 }) {
   const f = mainFile(asset);
   const { tagById } = useStore();
@@ -427,7 +519,9 @@ export function AssetCard({
       tabIndex={0}
       onClick={(e) => (selecting || e.metaKey || e.ctrlKey || e.shiftKey ? onToggle(e) : onOpen())}
       onKeyDown={(e) => (e.key === 'Enter' ? onOpen() : e.key === ' ' && (e.preventDefault(), onToggle(e as unknown as React.MouseEvent)))}
-      draggable={false}
+      draggable={!!onDragStart}
+      onDragStart={onDragStart}
+      onDragEnd={endDrag}
     >
       <div className="card-media">
         <Thumb asset={asset} />
@@ -486,8 +580,19 @@ export function FolderGlyph({ f, small }: { f: Folder; small?: boolean }) {
 }
 
 export function FolderTile({ folder, count, onOpen, menu }: { folder: Folder; count: number; onOpen: () => void; menu: MenuItem[] }) {
+  const s = useStore();
+  const { over, dropProps } = useMoveDrop(folder.id, nameOf(folder));
   return (
-    <div className="folder" tabIndex={0} onClick={onOpen} onKeyDown={(e) => e.key === 'Enter' && onOpen()}>
+    <div
+      className={`folder${over ? ' drop-on' : ''}`}
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => e.key === 'Enter' && onOpen()}
+      draggable={s.canEdit}
+      onDragStart={(e) => startDrag(e, { items: [], folders: [folder.id] })}
+      onDragEnd={endDrag}
+      {...dropProps}
+    >
       <FolderGlyph f={folder} />
       <div className="folder-text">
         <strong title={nameOf(folder)}>{nameOf(folder)}</strong>
@@ -498,16 +603,26 @@ export function FolderTile({ folder, count, onOpen, menu }: { folder: Folder; co
   );
 }
 
+function Crumb({ id, label }: { id: string | null; label: string }) {
+  const { go } = useStore();
+  const { over, dropProps } = useMoveDrop(id, label);
+  return (
+    <button className={over ? 'drop-on' : undefined} onClick={() => go({ page: 'folder', id })} {...dropProps}>
+      {label}
+    </button>
+  );
+}
+
 export function Crumbs({ id }: { id: string | null }) {
-  const { path, go } = useStore();
+  const { path } = useStore();
   const p = path(id);
   return (
     <nav className="crumbs" aria-label="Path">
-      <button onClick={() => go({ page: 'folder', id: null })}>Library</button>
+      <Crumb id={null} label="Library" />
       {p.map((f, i) => (
         <span key={f.id}>
           <IChevR />
-          {i === p.length - 1 ? <b aria-current="page">{nameOf(f)}</b> : <button onClick={() => go({ page: 'folder', id: f.id })}>{nameOf(f)}</button>}
+          {i === p.length - 1 ? <b aria-current="page">{nameOf(f)}</b> : <Crumb id={f.id} label={nameOf(f)} />}
         </span>
       ))}
     </nav>

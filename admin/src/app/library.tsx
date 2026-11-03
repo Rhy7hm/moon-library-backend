@@ -7,7 +7,7 @@ import { ClientAvatar, ShareWithClients } from './clients';
 import { useFileDrop, useStore } from './store';
 import { isEmpty, KIND_LABEL, KIND_QUERY, matches, parse, withFilter, without, type Token } from './search';
 import { TagDialog, tagQuery } from './tags';
-import { AssetBadges, AssetCard, Button, Crumbs, Empty, FolderPicker, FolderTile, PageHeader, PromptDialog, Segmented, Thumb, TypeIcon, type MenuItem } from './ui';
+import { AssetBadges, AssetCard, Button, Crumbs, Empty, FolderPicker, FolderTile, PageHeader, PromptDialog, Segmented, Thumb, TypeIcon, endDrag, startDrag, type MenuItem } from './ui';
 
 type Sort = 'new' | 'old' | 'name' | 'size';
 type View = 'grid' | 'list';
@@ -196,7 +196,9 @@ function FileGrid({ assets, showWhere, empty }: { assets: Asset[]; showWhere?: b
     anchor.current = id;
   };
   const selected = shown.filter((a) => sel.has(a.id));
-  const where = (a: Asset) => (showWhere ? s.path(a.folderId).map(nameOf).join(' › ') : undefined);
+  const where = (a: Asset) => (showWhere ? s.path(a.folderId).map(nameOf).join(' › ') || 'Library' : undefined);
+  // dragging a selected card takes the whole selection along
+  const drag = (a: Asset) => (s.canEdit ? (e: React.DragEvent) => startDrag(e, { items: sel.has(a.id) ? selected.map((x) => x.id) : [a.id], folders: [] }) : undefined);
 
   const typeOpts: { value: TypeFilter; label: string }[] = [
     { value: 'all', label: `All` },
@@ -241,7 +243,7 @@ function FileGrid({ assets, showWhere, empty }: { assets: Asset[]; showWhere?: b
       ) : view === 'grid' ? (
         <div className="grid" key={type + sort}>
           {shown.map((a) => (
-            <AssetCard key={a.id} asset={a} selected={sel.has(a.id)} selecting={sel.size > 0} onToggle={(e) => toggle(a.id, e)} onOpen={() => s.openSheet(a.id)} menu={assetMenu(a)} where={where(a)} />
+            <AssetCard key={a.id} asset={a} selected={sel.has(a.id)} selecting={sel.size > 0} onToggle={(e) => toggle(a.id, e)} onOpen={() => s.openSheet(a.id)} menu={assetMenu(a)} where={where(a)} onDragStart={drag(a)} />
           ))}
         </div>
       ) : (
@@ -256,7 +258,15 @@ function FileGrid({ assets, showWhere, empty }: { assets: Asset[]; showWhere?: b
           {shown.map((a) => {
             const f = mainFile(a);
             return (
-              <div key={a.id} className={`tr${sel.has(a.id) ? ' selected' : ''}`} role="row" onClick={(e) => (sel.size || e.metaKey || e.ctrlKey || e.shiftKey ? toggle(a.id, e) : s.openSheet(a.id))}>
+              <div
+                key={a.id}
+                className={`tr${sel.has(a.id) ? ' selected' : ''}`}
+                role="row"
+                onClick={(e) => (sel.size || e.metaKey || e.ctrlKey || e.shiftKey ? toggle(a.id, e) : s.openSheet(a.id))}
+                draggable={s.canEdit}
+                onDragStart={drag(a)}
+                onDragEnd={endDrag}
+              >
                 <span className="tr-thumb">
                   <Thumb asset={a} />
                 </span>
@@ -328,7 +338,7 @@ export function FolderPage({ id }: { id: string | null }) {
   const shared = id ? s.sharedWith('folder', id) : [];
 
   const onFiles = useCallback((files: File[]) => files.length && s.upload(files, id), [s, id]);
-  const over = useFileDrop(onFiles, s.canEdit && !!id);
+  const over = useFileDrop(onFiles, s.canEdit);
 
   if (id && (!folder || folder.deletedAt)) {
     return <Empty icon={<IFolder />} title="Folder not found" text="It may have been moved to Trash." action={<Button onClick={() => s.go({ page: 'folder', id: null })}>Back to Library</Button>} />;
@@ -339,7 +349,7 @@ export function FolderPage({ id }: { id: string | null }) {
     <div className="page">
       <PageHeader
         title={folder ? nameOf(folder) : 'Library'}
-        sub={folder ? `${sub.length ? `${sub.length} ${sub.length === 1 ? 'folder' : 'folders'} · ` : ''}${assets.length} ${assets.length === 1 ? 'file' : 'files'} · ${fmtSize(assets.reduce((n, a) => n + (mainFile(a)?.size ?? 0), 0))}` : 'All your folders. Open one to upload and manage its files.'}
+        sub={folder ? `${sub.length ? `${sub.length} ${sub.length === 1 ? 'folder' : 'folders'} · ` : ''}${assets.length} ${assets.length === 1 ? 'file' : 'files'} · ${fmtSize(assets.reduce((n, a) => n + (mainFile(a)?.size ?? 0), 0))}` : s.canEdit ? 'Drop files anywhere to add them. Drag files onto a folder to sort them.' : 'All your folders and files.'}
         actions={
           (s.canEdit || (id && folder)) && (
             <>
@@ -358,7 +368,7 @@ export function FolderPage({ id }: { id: string | null }) {
                   New folder
                 </Button>
               )}
-              {s.canEdit && id && (
+              {s.canEdit && (
                 <Button kind="primary" icon={<IUpload />} onClick={() => input.current?.click()}>
                   Upload
                 </Button>
@@ -394,36 +404,42 @@ export function FolderPage({ id }: { id: string | null }) {
         </section>
       )}
 
-      {id ? (
+      {id || assets.length > 0 || s.canEdit ? (
         <section>
-          {sub.length > 0 && assets.length > 0 && <h2 className="section-title">Files</h2>}
+          {sub.length > 0 && (assets.length > 0 || !id) && <h2 className="section-title">Files</h2>}
           <FileGrid
             assets={assets}
             empty={
-              <div className={`dropzone${s.canEdit ? '' : ' off'}`} onClick={() => s.canEdit && input.current?.click()}>
-                <IUpload />
-                <strong>{s.canEdit ? 'Drop files or folders here' : 'No files yet'}</strong>
-                <span>{s.canEdit ? 'Images, videos, PDFs, Office files, PSD and AI — previews are made automatically.' : 'Files uploaded by your team will show here.'}</span>
-              </div>
+              id || !sub.length ? (
+                <div className={`dropzone${s.canEdit ? '' : ' off'}`} onClick={() => s.canEdit && input.current?.click()}>
+                  <IUpload />
+                  <strong>{s.canEdit ? 'Drop files or folders here' : 'No files yet'}</strong>
+                  <span>
+                    {!s.canEdit
+                      ? 'Files uploaded by your team will show here.'
+                      : id
+                        ? 'Images, videos, PDFs, Office files, PSD and AI — previews are made automatically.'
+                        : 'Keep them here, or make a folder and drag them into it later.'}
+                  </span>
+                </div>
+              ) : (
+                <div className="dropzone slim" onClick={() => input.current?.click()}>
+                  <IUpload />
+                  <span>Drop files here to keep them in the Library — drag them onto a folder any time.</span>
+                </div>
+              )
             }
           />
         </section>
       ) : (
-        !sub.length && (
-          <Empty
-            icon={<IFolder />}
-            title="Create your first folder"
-            text="Organise by client, campaign or brand — for example “Client A / CNY 2027”."
-            action={s.canEdit && <Button kind="primary" icon={<IPlus />} onClick={() => setAsk({ kind: 'new-folder', parentId: null })}>New folder</Button>}
-          />
-        )
+        !sub.length && <Empty icon={<IFolder />} title="Nothing here yet" text="Files and folders your team adds will show here." />
       )}
 
       {over && (
         <div className="drop-overlay">
           <div>
             <IUpload />
-            <strong>Drop to upload to “{folder ? nameOf(folder) : ''}”</strong>
+            <strong>Drop to upload to “{folder ? nameOf(folder) : 'Library'}”</strong>
           </div>
         </div>
       )}

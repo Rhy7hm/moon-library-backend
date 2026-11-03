@@ -256,7 +256,7 @@ function ClientCard({ c, onOpen }: { c: Client; onOpen: () => void }) {
 export function ClientPage({ id }: { id: string }) {
   const s = useStore();
   const c = s.clients.find((x) => x.id === id);
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState<false | 'details' | 'logins'>(false);
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [making, setMaking] = useState(false);
@@ -265,9 +265,9 @@ export function ClientPage({ id }: { id: string }) {
       <Empty icon={<IBriefcase />} title="Client not found" text="They may have been removed." action={<Button onClick={() => s.go({ page: 'clients' })}>All clients</Button>} />
     );
   }
-  return <ClientBody c={c} onEdit={() => setEditing(true)} onAdd={() => setAdding(true)} onNewFolder={() => setMaking(true)} onDelete={() => setDeleting(true)} modals={
+  return <ClientBody c={c} onEdit={(tab) => setEditing(tab)} onAdd={() => setAdding(true)} onNewFolder={() => setMaking(true)} onDelete={() => setDeleting(true)} modals={
     <>
-      {editing && <ClientDialog client={c} onClose={() => setEditing(false)} />}
+      {editing && <ClientDialog client={c} tab={editing} onClose={() => setEditing(false)} />}
       {making && <ClientFolderDialog c={c} onClose={() => setMaking(false)} />}
       {adding && <SharePicker client={c} onClose={() => setAdding(false)} />}
       {deleting && (
@@ -287,7 +287,7 @@ export function ClientPage({ id }: { id: string }) {
   } />;
 }
 
-function ClientBody({ c, onEdit, onAdd, onNewFolder, onDelete, modals }: { c: Client; onEdit: () => void; onAdd: () => void; onNewFolder: () => void; onDelete: () => void; modals: React.ReactNode }) {
+function ClientBody({ c, onEdit, onAdd, onNewFolder, onDelete, modals }: { c: Client; onEdit: (tab: 'details' | 'logins') => void; onAdd: () => void; onNewFolder: () => void; onDelete: () => void; modals: React.ReactNode }) {
   const s = useStore();
   const sum = useShareSummary(c);
   const folders = c.shares.filter((x) => x.kind === 'folder');
@@ -319,31 +319,28 @@ function ClientBody({ c, onEdit, onAdd, onNewFolder, onDelete, modals }: { c: Cl
         </div>
         {s.canEdit && (
           <div className="page-actions">
-            <Button icon={<IPencil />} onClick={onEdit}>
+            <Button reveal icon={<IUsers />} onClick={() => onEdit('logins')}>
+              Logins
+            </Button>
+            <Button reveal icon={<IPencil />} onClick={() => onEdit('details')}>
               Edit
             </Button>
-            {s.isOwner && <Button kind="danger" icon={<ITrash />} aria-label="Remove client" onClick={onDelete} />}
-            <Button icon={<IFolder />} onClick={onNewFolder}>
+            {s.isOwner && (
+              <Button reveal kind="danger" icon={<ITrash />} onClick={onDelete}>
+                Remove
+              </Button>
+            )}
+            <Button reveal icon={<IFolder />} onClick={onNewFolder}>
               New folder
             </Button>
-            <Button kind="primary" icon={<IPlus />} onClick={onAdd}>
+            <Button reveal kind="primary" icon={<IPlus />} onClick={onAdd}>
               Share
             </Button>
           </div>
         )}
       </header>
 
-      <div className="client-sees">
-        <IShare />
-        <span>
-          <b>{c.name}</b> will see <b>{sum.files}</b> {sum.files === 1 ? 'file' : 'files'}
-          {sum.folders ? ` from ${sum.folders} ${sum.folders === 1 ? 'folder' : 'folders'}` : ''}
-          {sum.links ? ` and ${sum.links} ${sum.links === 1 ? 'link' : 'links'}` : ''}.
-          <small> Shared folders stay up to date — new uploads in them are included automatically.</small>
-        </span>
-      </div>
-
-      <Logins c={c} />
+      <ClientStats c={c} sum={sum} onLogins={() => onEdit('logins')} />
 
       {(home || inbox) && (
         <section>
@@ -447,9 +444,46 @@ function ClientBody({ c, onEdit, onAdd, onNewFolder, onDelete, modals }: { c: Cl
   );
 }
 
+/* ---------------- what the client sees, at a glance ---------------- */
+
+function ClientStats({ c, sum, onLogins }: { c: Client; sum: { files: number; folders: number; links: number }; onLogins: () => void }) {
+  const s = useStore();
+  const on = c.logins.filter((u) => !u.disabled);
+  const last = Math.max(0, ...c.logins.map((u) => u.lastLoginAt ?? 0));
+  const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
+  return (
+    <section className="client-stats" aria-label={`What ${c.name} sees`}>
+      <div className="client-stat">
+        <b>{sum.files}</b>
+        <span>{plural(sum.files, 'File', 'Files')}</span>
+      </div>
+      <div className="client-stat">
+        <b>{sum.folders}</b>
+        <span>{plural(sum.folders, 'Folder', 'Folders')}</span>
+      </div>
+      <div className="client-stat">
+        <b>{sum.links}</b>
+        <span>{plural(sum.links, 'Link', 'Links')}</span>
+      </div>
+      <button className="client-stat is-btn" onClick={onLogins} disabled={!s.canEdit && !c.logins.length} title="Website logins">
+        <b>{on.length}</b>
+        <span>
+          {plural(on.length, 'Login', 'Logins')}
+          <small>{!c.logins.length ? 'No one can sign in yet' : last ? `Last visit ${fmtAgo(last)}` : 'Not signed in yet'}</small>
+        </span>
+        <IChevR />
+      </button>
+      <p className="client-stats-note">
+        <IShare /> What {c.name} sees on the client website. Shared folders update by themselves.
+      </p>
+    </section>
+  );
+}
+
 /* ---------------- client website logins ---------------- */
 
 function Logins({ c }: { c: Client }) {
+  // shown in the client's Edit dialog, "Website logins" tab
   const s = useStore();
   const [adding, setAdding] = useState(false);
   const [shown, setShown] = useState<{ email: string; password: string; fresh: boolean } | null>(null);
@@ -459,11 +493,9 @@ function Logins({ c }: { c: Client }) {
     if (r) setShown({ email: u.email, password: r.password, fresh: false });
   };
   return (
-    <section className="panel logins">
-      <div className="panel-head">
-        <h3>
-          <IUsers /> Client website logins
-        </h3>
+    <section className="logins">
+      <div className="logins-head">
+        <p className="muted">People at {c.name} who can sign in to the client website.</p>
         {s.canEdit && (
           <Button size="sm" icon={<IPlus />} onClick={() => setAdding(true)}>
             Add login
@@ -471,7 +503,10 @@ function Logins({ c }: { c: Client }) {
         )}
       </div>
       {!c.logins.length ? (
-        <p className="muted">No one at {c.name} can sign in yet. Add a login and send them the password.</p>
+        <div className="logins-empty">
+          <IUsers />
+          <p>No one at {c.name} can sign in yet. Add a login and send them the password.</p>
+        </div>
       ) : (
         <div className="list-flat">
           {c.logins.map((u) => (
@@ -617,23 +652,38 @@ function SharedFolder({ f, share, note, onUntil, onRemove }: { f: Folder | undef
   if (!f) return null;
   const count = (id: string): number => s.assetsIn(id).length + s.children(id).reduce((n, k) => n + count(k.id), 0);
   const trashed = !!f.deletedAt || s.path(f.id).some((x) => x.deletedAt);
+  const n = count(f.id);
+  const where = note ?? (s.path(f.parentId).map(nameOf).join(' › ') || 'Library');
   return (
-    <div className={`folder${trashed || (share && ended(share)) ? ' is-trashed' : ''}`} tabIndex={0} onClick={() => !trashed && s.go({ page: 'folder', id: f.id })}>
+    <div className={`folder shared-folder${trashed || (share && ended(share)) ? ' is-trashed' : ''}`} tabIndex={0} onClick={() => !trashed && s.go({ page: 'folder', id: f.id })}>
       <FolderGlyph f={f} />
       <div className="folder-text">
-        <strong>{nameOf(f)}</strong>
-        <small>{trashed ? 'In Trash — not shown' : `${count(f.id)} files · ${note ?? (s.path(f.parentId).map(nameOf).join(' › ') || 'Library')}`}</small>
-        {share && <UntilBadge sh={share} />}
+        <strong title={nameOf(f)}>{nameOf(f)}</strong>
+        <small title={trashed ? undefined : where}>
+          {trashed ? (
+            'In Trash — not shown'
+          ) : (
+            <>
+              <span className="sf-count">{n === 1 ? '1 file' : `${n} files`}</span>
+              <span className="sf-where">{where}</span>
+            </>
+          )}
+          {share && <UntilBadge sh={share} />}
+        </small>
       </div>
-      {onUntil && (
-        <button className="icon-btn" aria-label="Set end date" title={share?.expiresAt ? 'Change end date' : 'Set end date'} onClick={(e) => (e.stopPropagation(), onUntil())}>
-          <IClock />
-        </button>
-      )}
-      {onRemove && (
-        <button className="icon-btn" aria-label="Stop sharing" title="Stop sharing" onClick={(e) => (e.stopPropagation(), onRemove())}>
-          <IX />
-        </button>
+      {(onUntil || onRemove) && (
+        <span className="sf-actions">
+          {onUntil && (
+            <button className="icon-btn" aria-label="Set end date" title={share?.expiresAt ? 'Change end date' : 'Set end date'} onClick={(e) => (e.stopPropagation(), onUntil())}>
+              <IClock />
+            </button>
+          )}
+          {onRemove && (
+            <button className="icon-btn" aria-label="Stop sharing" title="Stop sharing" onClick={(e) => (e.stopPropagation(), onRemove())}>
+              <IX />
+            </button>
+          )}
+        </span>
       )}
     </div>
   );
@@ -694,8 +744,10 @@ function ClientFolderDialog({ c, onClose }: { c: Client; onClose: () => void }) 
 
 /* ---------------- create / edit ---------------- */
 
-function ClientDialog({ client, onClose }: { client: Client | null; onClose: () => void }) {
+function ClientDialog({ client, tab: firstTab = 'details', onClose }: { client: Client | null; tab?: 'details' | 'logins'; onClose: () => void }) {
   const s = useStore();
+  const [tab, setTab] = useState<'details' | 'logins'>(client ? firstTab : 'details');
+  const live = client ? s.clients.find((x) => x.id === client.id) ?? client : null; // logins change while it's open
   const fileRef = useRef<HTMLInputElement>(null);
   const [name, setName] = useState(client?.name ?? '');
   const [email, setEmail] = useState(client?.email ?? '');
@@ -760,19 +812,42 @@ function ClientDialog({ client, onClose }: { client: Client | null; onClose: () 
 
   return (
     <Dialog
-      title={client ? 'Edit client' : 'New client'}
+      title={client ? client.name : 'New client'}
       onClose={onClose}
+      wide={tab === 'logins'}
       footer={
-        <>
-          <Button onClick={onClose} disabled={busy}>
-            Cancel
+        tab === 'logins' ? (
+          <Button kind="primary" onClick={onClose}>
+            Done
           </Button>
-          <Button kind="primary" disabled={!name.trim() || busy} onClick={save}>
-            {client ? 'Save' : 'Add client'}
-          </Button>
-        </>
+        ) : (
+          <>
+            <Button onClick={onClose} disabled={busy}>
+              Cancel
+            </Button>
+            <Button kind="primary" disabled={!name.trim() || busy} onClick={save}>
+              {client ? 'Save' : 'Add client'}
+            </Button>
+          </>
+        )
       }
     >
+      {live && (
+        <div className="client-tabs">
+          <Segmented
+            label="Edit"
+            value={tab}
+            onChange={setTab}
+            options={[
+              { value: 'details', label: 'Details' },
+              { value: 'logins', label: <>Website logins{live.logins.length ? <em className="seg-count">{live.logins.length}</em> : null}</> },
+            ]}
+          />
+        </div>
+      )}
+      {tab === 'logins' && live ? (
+        <Logins c={live} />
+      ) : (
       <form onSubmit={(e) => (e.preventDefault(), save())}>
         <div className="client-preview">
           <div className="client-photo">
@@ -828,6 +903,7 @@ function ClientDialog({ client, onClose }: { client: Client | null; onClose: () 
         </label>
         <button type="submit" hidden />
       </form>
+      )}
     </Dialog>
   );
 }
@@ -988,27 +1064,42 @@ function SharePicker({ client, onClose }: { client: Client; onClose: () => void 
   );
 }
 
-/** From the library: share one folder or file with one or more clients. */
+/** From the library: share one folder or file with one or more clients (tick to share, untick to stop). */
 /** Share one folder or file — or many selected files at once — with one or more clients, optionally until a date. */
 export function ShareWithClients({ kind, id, ids, label, onClose }: { kind: 'folder' | 'item'; id?: string; ids?: string[]; label: string; onClose: () => void }) {
   const s = useStore();
   const targets = ids ?? (id ? [id] : []);
   const many = targets.length > 1;
-  // a client is ticked (and locked) when everything is already shared with them, directly or through a folder
+  // already shared directly, or only because a parent folder is shared
   const hasAll = (c: Client, through: boolean) =>
     targets.every((t) => c.shares.some((x) => x.kind === kind && x.targetId === t && !ended(x)) || (through && s.sharedWith(kind, t).some((y) => y.id === c.id)));
   const direct = new Set(s.clients.filter((c) => hasAll(c, false)).map((c) => c.id));
   const viaParent = new Set(s.clients.filter((c) => hasAll(c, true)).map((c) => c.id));
-  const [sel, setSel] = useState<Set<string>>(new Set());
+  // start with everyone who already has a direct share ticked — untick to unshare
+  const [sel, setSel] = useState<Set<string>>(() => new Set(direct));
   const [expires, setExpires] = useState<number | null>(null);
-  const share = async () => {
-    let n = 0;
-    for (const cid of sel) {
-      if (await s.run('shares.add', { clientId: cid, [kind === 'folder' ? 'folderIds' : 'itemIds']: targets, expiresAt: expires })) n++;
+  const toAdd = [...sel].filter((cid) => !direct.has(cid));
+  const toRemove = [...direct].filter((cid) => !sel.has(cid));
+  const dirty = toAdd.length > 0 || toRemove.length > 0;
+  const save = async () => {
+    let added = 0;
+    let removed = 0;
+    for (const cid of toAdd) {
+      if (await s.run('shares.add', { clientId: cid, [kind === 'folder' ? 'folderIds' : 'itemIds']: targets, expiresAt: expires })) added++;
     }
-    if (n) s.toast(`Shared ${many ? `${targets.length} files` : `“${label}”`} with ${n} ${n === 1 ? 'client' : 'clients'}`, { tone: 'ok' });
+    for (const cid of toRemove) {
+      const c = s.clients.find((x) => x.id === cid);
+      if (!c) continue;
+      const ids = c.shares.filter((x) => x.kind === kind && x.targetId && targets.includes(x.targetId) && !ended(x)).map((x) => x.id);
+      if (ids.length && (await s.run('shares.remove', { clientId: cid, ids }))) removed++;
+    }
+    if (added && removed) s.toast(`Updated sharing for “${label}”`, { tone: 'ok' });
+    else if (added) s.toast(`Shared ${many ? `${targets.length} files` : `“${label}”`} with ${added} ${added === 1 ? 'client' : 'clients'}`, { tone: 'ok' });
+    else if (removed) s.toast(`Stopped sharing ${many ? `${targets.length} files` : `“${label}”`} with ${removed} ${removed === 1 ? 'client' : 'clients'}`, { tone: 'ok' });
     onClose();
   };
+  const action =
+    toRemove.length && !toAdd.length ? 'Stop sharing' : toAdd.length && toRemove.length ? 'Save' : 'Share';
   return (
     <Dialog
       title={many ? `Share ${targets.length} files` : `Share “${label}”`}
@@ -1016,8 +1107,8 @@ export function ShareWithClients({ kind, id, ids, label, onClose }: { kind: 'fol
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button kind="primary" disabled={!sel.size} onClick={share}>
-            Share
+          <Button kind="primary" disabled={!dirty} onClick={save}>
+            {action}
           </Button>
         </>
       }
@@ -1029,17 +1120,23 @@ export function ShareWithClients({ kind, id, ids, label, onClose }: { kind: 'fol
           {s.clients.map((c) => {
             const has = direct.has(c.id);
             const inherited = !has && viaParent.has(c.id);
+            const on = inherited || sel.has(c.id);
             return (
-              <label key={c.id} className={`pick-row pick-label client-pick${has || inherited ? ' done' : ''}`}>
-                <input type="checkbox" checked={has || inherited || sel.has(c.id)} disabled={has || inherited} onChange={() => {
-                  const n = new Set(sel);
-                  if (n.has(c.id)) n.delete(c.id);
-                  else n.add(c.id);
-                  setSel(n);
-                }} />
+              <label key={c.id} className={`pick-row pick-label client-pick${inherited || (has && on) ? ' done' : ''}`}>
+                <input
+                  type="checkbox"
+                  checked={on}
+                  disabled={inherited}
+                  onChange={() => {
+                    const n = new Set(sel);
+                    if (n.has(c.id)) n.delete(c.id);
+                    else n.add(c.id);
+                    setSel(n);
+                  }}
+                />
                 <ClientAvatar c={c} size={28} />
                 <span>{c.name}</span>
-                {has && <em className="pick-tag">Shared</em>}
+                {has && on && <em className="pick-tag">Shared</em>}
                 {inherited && <em className="pick-tag">Via folder</em>}
               </label>
             );

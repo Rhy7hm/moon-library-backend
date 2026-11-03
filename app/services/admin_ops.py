@@ -14,7 +14,7 @@ import re
 import unicodedata
 from typing import Any, Callable
 
-from ..db import in_list, q
+from ..db import UPSERT_SETTING, in_list, q
 from ..langs import FILE_LANG_LABEL, LANG_CODES, clean_langs, is_file_lang
 from ..storage import IMMUTABLE, storage
 from ..util import HttpError, is_num, new_id, now
@@ -245,6 +245,40 @@ def unique_slug(parent_id: str | None, wanted: str, self_id: str | None = None) 
 def _folder_exists(fid: str) -> None:
     if not q.first("SELECT id FROM folders WHERE id = ?", fid):
         raise HttpError(404, "Folder not found")
+
+
+# ---------------------------------------------------------------- files at the top of the Library
+# Every file lives in a folder. Files put straight into the Library (not into a folder) go into one
+# folder kept for that, "Unsorted": the admin shows its files at the top of the Library rather than as
+# a folder, and the Drive backup copies it as a folder called "Unsorted".
+
+LOOSE_KEY = "library.looseFolder"  # settings: the id of the "Unsorted" folder
+LOOSE_NAME = "Unsorted"
+
+
+def _live_folder(fid: str | None) -> bool:
+    """The folder exists and neither it nor a folder above it is in the Trash."""
+    seen = 0
+    while fid and seen < 50:
+        r = q.first("SELECT parent_id, deleted_at FROM folders WHERE id = ?", fid)
+        if not r or r["deleted_at"]:
+            return False
+        fid, seen = r["parent_id"], seen + 1
+    return True
+
+
+def loose_folder_id() -> str | None:
+    r = q.first("SELECT value FROM settings WHERE `key` = ?", LOOSE_KEY)
+    return r["value"] if r and _live_folder(r["value"]) else None
+
+
+def loose_folder(ctx: Ctx, b: Body | None = None) -> dict:
+    """The "Unsorted" folder, made the first time a file goes straight into the Library."""
+    fid = loose_folder_id()
+    if not fid:
+        fid = folder_create(ctx, {"parentId": None, "name": {"en": LOOSE_NAME}})["id"]
+        q.run(UPSERT_SETTING, LOOSE_KEY, fid, now(), ctx.user)
+    return {"id": fid}
 
 
 def _item_row(iid: str) -> dict:
@@ -665,7 +699,7 @@ def copy_start(ctx: Ctx, b: Body):
     """
     Copies folders (with everything inside) and cards into a folder (copy.start in admin-ops.ts):
       folderIds, itemIds   what to copy
-      targetId             where (null = top level; only folders can go there)
+      targetId             where (null = the Library itself; files there go into "Unsorted")
     The new folders, cards and file rows are made at once; the files stay 'uploading' until
     `copy.files` has made their stored copies. Pasted next to a namesake → " (copy)".
     """
@@ -722,8 +756,6 @@ def copy_start(ctx: Ctx, b: Body):
         lineage(it["folder_id"])
     # A selected descendant is already included in the selected ancestor's copy.
     item_ids = [i for i in item_ids if items[i]["folder_id"] not in order]
-    if item_ids and target is None:
-        raise HttpError(400, "Files have to be inside a folder")
     item_list = list(items.values())
     files: list[dict] = []
     for i in range(0, len(item_list), 90):
@@ -786,11 +818,12 @@ def copy_start(ctx: Ctx, b: Body):
     if roots:
         stmts += [("UPDATE folders SET sort = ? WHERE id = ?", [(n + 1) * 10, fid]) for n, fid in enumerate(placement)]
     titles: set[str] = set()
-    if target and item_ids:
-        titles = {_en_of(_parse_name(r["title"])).lower() for r in q.all("SELECT title FROM items WHERE folder_id = ? AND deleted_at IS NULL", target)}
+    item_target = target or (loose_folder(ctx)["id"] if item_ids else None)  # files pasted into the Library go to "Unsorted"
+    if item_target and item_ids:
+        titles = {_en_of(_parse_name(r["title"])).lower() for r in q.all("SELECT title FROM items WHERE folder_id = ? AND deleted_at IS NULL", item_target)}
     for it in item_list:
         loose = it["id"] in item_ids
-        folder = target if loose else new_folder[it["folder_id"]]
+        folder = item_target if loose else new_folder[it["folder_id"]]
         title = _parse_name(it["title"])
         if loose and _en_of(title).lower() in titles:
             title = _with_copy(title, titles)
@@ -898,8 +931,6 @@ def move(ctx: Ctx, b: Body):
         raise HttpError(400, "Expected a folder id")
     if target:
         _folder_exists(target)
-    if item_ids and not target:
-        raise HttpError(400, "Files have to be inside a folder")
     if folder_ids and target:
         if target in subtree(folder_ids):
             raise HttpError(400, "A folder can't be moved into itself")
@@ -911,8 +942,8 @@ def move(ctx: Ctx, b: Body):
             continue
         slug = unique_slug(target, cur["slug"], fid)
         stmts.append(("UPDATE folders SET parent_id = ?, slug = ?, sort = ?, updated_at = ? WHERE id = ?", [target, slug, t, t, fid]))
-    if item_ids:
-        stmts.append((f"UPDATE items SET folder_id = ?, updated_at = ? WHERE id IN ({in_list(len(item_ids))})", [target, t, *item_ids]))
+    if item_ids:  # files moved to the Library itself go into "Unsorted"
+        stmts.append((f"UPDATE items SET folder_id = ?, updated_at = ? WHERE id IN ({in_list(len(item_ids))})", [target or loose_folder(ctx)["id"], t, *item_ids]))
     q.batch(stmts)
     return {"ok": True}
 
@@ -1054,6 +1085,7 @@ def mpu_abort(ctx: Ctx, b: Body):
 
 OPS: dict[str, Callable[[Ctx, Body], Any]] = {
     "folder.create": folder_create,
+    "folder.loose": loose_folder,
     "folder.update": folder_update,
     "folder.iconImage": folder_icon_image,
     "folder.reorder": folder_reorder,

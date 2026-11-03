@@ -78,7 +78,9 @@ type Store = {
   tags: Tag[];
   tagById: Map<string, Tag>;
   children: (id: string | null) => Folder[];
+  /** a folder's files; null = the files at the top of the Library (kept in "Unsorted") */
   assetsIn: (id: string | null) => Asset[];
+  looseFolderId: string | null;
   path: (id: string | null) => Folder[];
   reload: () => Promise<void>;
   route: Route;
@@ -181,7 +183,9 @@ export function StoreProvider({ me: meProp, onSignOut, children }: { me: Me; onS
   const derived = useMemo(() => {
     const all = tree?.folders ?? [];
     const byId = new Map(all.map((f) => [f.id, f]));
-    const folders = all.filter((f) => !f.deletedAt);
+    // "Unsorted" holds the files put straight into the Library: they show at the top of the Library, not as a folder
+    const loose = tree?.looseFolderId ?? null;
+    const folders = all.filter((f) => !f.deletedAt && f.id !== loose);
     const kids = new Map<string | null, Folder[]>();
     for (const f of folders) {
       const k = f.parentId ?? null;
@@ -202,7 +206,7 @@ export function StoreProvider({ me: meProp, onSignOut, children }: { me: Me; onS
       const out: Folder[] = [];
       for (let cur = id, guard = 0; cur && guard < 50; cur = byId.get(cur)?.parentId ?? null, guard++) {
         const f = byId.get(cur);
-        if (f) out.unshift(f);
+        if (f && f.id !== loose) out.unshift(f);
       }
       return out;
     };
@@ -215,7 +219,8 @@ export function StoreProvider({ me: meProp, onSignOut, children }: { me: Me; onS
       tags: tree?.tags ?? [],
       tagById: new Map((tree?.tags ?? []).map((t) => [t.id, t])),
       children: (id: string | null) => kids.get(id) ?? [],
-      assetsIn: (id: string | null) => (id ? inFolder.get(id) ?? [] : []),
+      assetsIn: (id: string | null) => inFolder.get(id ?? loose ?? '') ?? [],
+      looseFolderId: loose,
       path,
     };
   }, [tree]);
@@ -240,9 +245,15 @@ export function StoreProvider({ me: meProp, onSignOut, children }: { me: Me; onS
   const upload = useCallback(
     async (files: File[], folderId: string | null) => {
       if (!folderId) {
-        toast('Open a folder first, then upload into it.', { tone: 'err' });
-        return;
+        // straight into the Library: the files go into "Unsorted", shown at the top of the Library
+        try {
+          folderId = (await op<{ id: string }>('folder.loose', {})).id;
+        } catch (e) {
+          toast(errText(e), { tone: 'err' });
+          return;
+        }
       }
+      const target = folderId;
       const jobs = files.map((f) => ({ id: `u${++jobSeq}`, name: f.name, size: f.size, pct: 0, state: 'waiting' as const }));
       setUploads((u) => [...u.filter((j) => j.state !== 'done'), ...jobs]);
       let ok = 0;
@@ -256,7 +267,7 @@ export function StoreProvider({ me: meProp, onSignOut, children }: { me: Me; onS
             const mime = file.type || guessMime(file.name);
             const kind = kindOf(file.name, mime);
             const d = await derive(file);
-            const itemId = await createItem({ base: '' }, folderId, { en: titleFromName(file.name) });
+            const itemId = await createItem({ base: '' }, target, { en: titleFromName(file.name) });
             await uploadVersion({ base: '' }, { itemId, lang: 'all', kind, name: file.name, mime, file, derived: d }, (s, t) => patchJob(jid, { pct: Math.max(2, Math.round((s / t) * 100)) }));
             patchJob(jid, { state: 'done', pct: 100 });
             ok++;

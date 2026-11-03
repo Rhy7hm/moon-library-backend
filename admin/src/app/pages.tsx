@@ -514,15 +514,15 @@ export function TeamPage() {
       ) : (
         <div className="list-card">
           {users.map((u) => (
-            <div className="list-row" key={u.id}>
+            <div className={`list-row${u.disabled ? ' is-off' : ''}`} key={u.id}>
               <UserAvatar user={u} />
               <span className="list-text">
                 <strong>
                   {u.name} {u.id === s.me.id && <em className="you">You</em>}
+                  {!!u.disabled && <em className="you">Turned off</em>}
                 </strong>
                 <small>
                   @{u.username} · {u.last_login_at ? `last signed in ${fmtAgo(u.last_login_at)}` : 'never signed in'}
-                  {u.disabled ? ' · turned off' : ''}
                 </small>
               </span>
               {s.isOwner && u.id !== s.me.id ? (
@@ -535,17 +535,36 @@ export function TeamPage() {
                 <span className="role-pill">{u.role[0].toUpperCase() + u.role.slice(1)}</span>
               )}
               {s.isOwner && u.id !== s.me.id && (
-                <Button
-                  size="sm"
-                  kind="plain"
-                  icon={<IKey />}
-                  onClick={async () => {
-                    const pw = newPassword();
-                    if (await s.run('users.password', { id: u.id, password: pw }, 'New password set')) setMade({ username: u.username, password: pw });
-                  }}
-                >
-                  Reset password
-                </Button>
+                <span className="row-actions">
+                  <Button
+                    size="sm"
+                    kind="plain"
+                    icon={<IKey />}
+                    onClick={async () => {
+                      const pw = newPassword();
+                      if (await s.run('users.password', { id: u.id, password: pw }, 'New password set')) setMade({ username: u.username, password: pw });
+                    }}
+                  >
+                    Reset password
+                  </Button>
+                  <Button
+                    size="sm"
+                    kind="plain"
+                    onClick={async () => {
+                      const off = !u.disabled;
+                      if (
+                        await s.run(
+                          'users.update',
+                          { id: u.id, disabled: off },
+                          off ? `${u.name} is signed out and can't sign in` : `${u.name} can sign in again`,
+                        )
+                      )
+                        load();
+                    }}
+                  >
+                    {u.disabled ? 'Turn on' : 'Turn off'}
+                  </Button>
+                </span>
               )}
             </div>
           ))}

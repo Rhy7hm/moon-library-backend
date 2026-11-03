@@ -14,7 +14,7 @@ import { ClientPage, ClientsPage } from './clients';
 import { useStore, type Route } from './store';
 import { gsap, pop, settle } from './motion';
 import { useTheme } from './theme';
-import { MenuButton, Toasts, UploadTray, UserAvatar } from './ui';
+import { MenuButton, Toasts, UploadTray, UserAvatar, useMoveDrop } from './ui';
 
 function NavItem({ icon, label, active, onClick, count }: { icon: ReactNode; label: string; active: boolean; onClick: () => void; count?: number }) {
   return (
@@ -73,17 +73,29 @@ function TreeNode({ f, depth, current }: { f: Folder; depth: number; current: st
   const kids = s.children(f.id);
   const inPath = !!current && s.path(current).some((x) => x.id === f.id);
   const [open, setOpen] = useState(inPath);
+  // open when you navigate into this folder (or a child); don't force-reopen if you collapsed it by hand
   useEffect(() => {
     if (inPath) setOpen(true);
-  }, [inPath]);
+  }, [current]); // eslint-disable-line react-hooks/exhaustive-deps
   const on = current === f.id;
+  const { over, dropProps } = useMoveDrop(f.id, nameOf(f));
+  const toggleOpen = () => setOpen((v) => !v);
+  const openFolder = () => {
+    // already here with children: click again collapses / expands (Finder-style)
+    if (on && kids.length) {
+      toggleOpen();
+      return;
+    }
+    if (kids.length) setOpen(true);
+    s.go({ page: 'folder', id: f.id });
+  };
   return (
     <>
-      <div className={`tree-row${on ? ' on' : ''}`} style={{ paddingLeft: 6 + depth * 14 }}>
-        <button className={`tree-caret${open ? ' open' : ''}${kids.length ? '' : ' none'}`} aria-label={open ? 'Collapse' : 'Expand'} onClick={() => setOpen((v) => !v)} tabIndex={kids.length ? 0 : -1}>
+      <div className={`tree-row${on ? ' on' : ''}${over ? ' drop-on' : ''}`} style={{ paddingLeft: 6 + depth * 14 }} {...dropProps}>
+        <button className={`tree-caret${open ? ' open' : ''}${kids.length ? '' : ' none'}`} aria-label={open ? 'Collapse' : 'Expand'} onClick={toggleOpen} tabIndex={kids.length ? 0 : -1}>
           <IChevR />
         </button>
-        <button className="tree-name" onClick={() => s.go({ page: 'folder', id: f.id })} title={nameOf(f)}>
+        <button className="tree-name" onClick={openFolder} title={nameOf(f)}>
           {theme === '3d' ? (
             <img className="tree-folder" src={`${import.meta.env.BASE_URL}nav/folder.webp`} alt="" draggable={false} />
           ) : (
