@@ -2,11 +2,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { assetSize, errText, mainFile, nameOf, op, titleOf, type Role } from './api';
 import { fmtAgo, fmtDate, fmtSize, greeting, typeOf } from './format';
-import { IDoc, IImage, IKey, IPen, IPlus, IPulse, IRestore, ITrash, IUpload, IUsers, IVideo } from './icons';
+import { IChevD, IDoc, IImage, IKey, ILock, IPen, IPlus, IPulse, IRestore, ITrash, IUnlock, IUpload, IVideo } from './icons';
 import { shatter } from './shatter';
 import { ShredDialog, type ShredItem } from './shredder';
 import { useStore } from './store';
-import { AssetCard, Button, ConfirmDialog, CopyButton, Dialog, Empty, FolderGlyph, PageHeader, Segmented, Thumb, UserAvatar } from './ui';
+import { AssetCard, Button, ConfirmDialog, CopyButton, Dialog, Empty, FolderGlyph, MenuButton, PageHeader, Segmented, Thumb, UserAvatar, type MenuItem } from './ui';
 
 /* ---------------- Home ---------------- */
 
@@ -488,6 +488,7 @@ export function ActivityPage() {
 /* ---------------- Team ---------------- */
 
 type User = { id: string; username: string; name: string; role: Role; disabled: number; last_login_at: number | null; sessions: number; avatarKey?: string | null };
+const ROLE_INFO: Record<Role, string> = { owner: 'Everything, including the team, Trash and settings', editor: 'Upload, organise, share and delete', viewer: 'Browse and download only' };
 const ROLE_TEXT: Record<Role, string> = { owner: 'Owner — everything, including team and Trash', editor: 'Editor — upload, organise and delete', viewer: 'Viewer — browse and download only' };
 
 export function TeamPage() {
@@ -508,73 +509,77 @@ export function TeamPage() {
 
   return (
     <div className="page">
-      <PageHeader title="Team" sub="People who can sign in to this library." actions={s.isOwner && <Button kind="primary" icon={<IPlus />} onClick={() => setAdding(true)}>Add person</Button>} />
+      <PageHeader
+        title="Team"
+        sub={users ? `${users.length} ${users.length === 1 ? 'person' : 'people'}${users.some((u) => u.disabled) ? ` · ${users.filter((u) => u.disabled).length} turned off` : ''} — who can sign in to this library.` : 'People who can sign in to this library.'}
+        actions={s.isOwner && <Button kind="primary" icon={<IPlus />} onClick={() => setAdding(true)}>Add person</Button>}
+      />
       {!users ? (
         <p className="muted">Loading…</p>
       ) : (
-        <div className="list-card">
-          {users.map((u) => (
-            <div className={`list-row${u.disabled ? ' is-off' : ''}`} key={u.id}>
-              <UserAvatar user={u} />
-              <span className="list-text">
-                <strong>
-                  {u.name} {u.id === s.me.id && <em className="you">You</em>}
-                  {!!u.disabled && <em className="you">Turned off</em>}
-                </strong>
-                <small>
-                  @{u.username} · {u.last_login_at ? `last signed in ${fmtAgo(u.last_login_at)}` : 'never signed in'}
-                </small>
-              </span>
-              {s.isOwner && u.id !== s.me.id ? (
-                <select className="select" value={u.role} aria-label="Role" onChange={(e) => s.run('users.update', { id: u.id, role: e.target.value }, 'Role changed').then(load)}>
-                  <option value="owner">Owner</option>
-                  <option value="editor">Editor</option>
-                  <option value="viewer">Viewer</option>
-                </select>
-              ) : (
-                <span className="role-pill">{u.role[0].toUpperCase() + u.role.slice(1)}</span>
-              )}
-              {s.isOwner && u.id !== s.me.id && (
-                <span className="row-actions">
-                  <Button
-                    size="sm"
-                    kind="plain"
-                    icon={<IKey />}
-                    onClick={async () => {
-                      const pw = newPassword();
-                      if (await s.run('users.password', { id: u.id, password: pw }, 'New password set')) setMade({ username: u.username, password: pw });
-                    }}
-                  >
-                    Reset password
-                  </Button>
-                  <Button
-                    size="sm"
-                    kind="plain"
-                    onClick={async () => {
-                      const off = !u.disabled;
-                      if (
-                        await s.run(
-                          'users.update',
-                          { id: u.id, disabled: off },
-                          off ? `${u.name} is signed out and can't sign in` : `${u.name} can sign in again`,
-                        )
-                      )
-                        load();
-                    }}
-                  >
-                    {u.disabled ? 'Turn on' : 'Turn off'}
-                  </Button>
-                </span>
-              )}
-            </div>
-          ))}
+        <div className="list-card team-list">
+          {[...users]
+            .sort((a, b) => Number(!!a.disabled) - Number(!!b.disabled) || Number(b.id === s.me.id) - Number(a.id === s.me.id))
+            .map((u) => {
+              const mine = u.id === s.me.id;
+              const manage = s.isOwner && !mine;
+              const menu: MenuItem[] = [
+                {
+                  label: 'Reset password',
+                  icon: <IKey />,
+                  onClick: async () => {
+                    const pw = newPassword();
+                    if (await s.run('users.password', { id: u.id, password: pw }, 'New password set')) setMade({ username: u.username, password: pw });
+                  },
+                },
+                'sep',
+                {
+                  label: u.disabled ? 'Turn on — can sign in again' : 'Turn off — signs them out',
+                  icon: u.disabled ? <IUnlock /> : <ILock />,
+                  danger: !u.disabled,
+                  onClick: async () => {
+                    const off = !u.disabled;
+                    if (await s.run('users.update', { id: u.id, disabled: off }, off ? `${u.name} is signed out and can't sign in` : `${u.name} can sign in again`)) load();
+                  },
+                },
+              ];
+              return (
+                <div className={`list-row team-row${u.disabled ? ' is-off' : ''}`} key={u.id}>
+                  <UserAvatar user={u} />
+                  <span className="list-text">
+                    <strong>
+                      {u.name}
+                      {mine && <em className="you">You</em>}
+                      {!!u.disabled && <em className="off-badge">Turned off</em>}
+                    </strong>
+                    <small>
+                      @{u.username} · {u.last_login_at ? `last signed in ${fmtAgo(u.last_login_at)}` : 'never signed in'}
+                    </small>
+                  </span>
+                  {manage ? (
+                    <label className="role-select">
+                      <select value={u.role} aria-label={`Role for ${u.name}`} onChange={(e) => s.run('users.update', { id: u.id, role: e.target.value }, 'Role changed').then(load)}>
+                        <option value="owner">Owner</option>
+                        <option value="editor">Editor</option>
+                        <option value="viewer">Viewer</option>
+                      </select>
+                      <IChevD />
+                    </label>
+                  ) : (
+                    <span className="role-pill">{u.role[0].toUpperCase() + u.role.slice(1)}</span>
+                  )}
+                  {manage ? <MenuButton items={menu} label={`More for ${u.name}`} /> : <span className="team-menu-gap" />}
+                </div>
+              );
+            })}
         </div>
       )}
-      <div className="role-help">
-        {(Object.keys(ROLE_TEXT) as Role[]).map((r) => (
-          <p key={r}>
-            <IUsers /> {ROLE_TEXT[r]}
-          </p>
+      <div className="role-cards">
+        {(Object.keys(ROLE_INFO) as Role[]).map((r) => (
+          <div key={r}>
+            <b>{r[0].toUpperCase() + r.slice(1)}</b>
+            <span>{ROLE_INFO[r]}</span>
+          </div>
         ))}
       </div>
       {adding && (

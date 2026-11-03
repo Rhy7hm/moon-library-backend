@@ -604,9 +604,6 @@ section { margin-bottom: 28px; }
 .list-text small { color: var(--ink-2); font-size: 12px; }
 .you { font-style: normal; font-size: 11px; font-weight: 650; padding: 1px 6px; margin-left: 4px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); vertical-align: 1px; }
 .role-pill { padding: 3px 10px; border-radius: 99px; background: var(--press); font-size: 12px; font-weight: 600; color: var(--ink-2); }
-.role-help { margin-top: 16px; display: flex; flex-direction: column; gap: 6px; color: var(--ink-2); font-size: 12.5px; }
-.role-help p { display: flex; align-items: center; gap: 8px; }
-.role-help svg { width: 14px; height: 14px; }
 .row-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; background: var(--surface-2); color: var(--ink-2); flex: none; }
 .row-icon svg { width: 17px; height: 17px; }
 .form { max-width: 380px; }
@@ -1295,3 +1292,26 @@ body.is-moving .folder:not(.drop-on) { box-shadow: inset 0 0 0 1.5px color-mix(i
 .sf-actions .icon-btn svg { width: 15px; height: 15px; }
 .shared-folder:hover .sf-actions, .shared-folder:focus-within .sf-actions { opacity: 1; transform: none; }
 @media (hover: none) { .sf-actions { opacity: 1; transform: none; } }
+
+/* ---------------- Team ---------------- */
+.team-row { gap: 14px; }
+.team-row .list-text strong { display: flex; align-items: center; gap: 6px; }
+.team-row .you { margin-left: 0; }
+.off-badge { font-style: normal; font-size: 11px; font-weight: 650; padding: 1px 7px; border-radius: 99px; background: var(--press); color: var(--ink-2); }
+.team-row.is-off .list-text strong { color: var(--ink-2); }
+.team-row.is-off .avatar { filter: grayscale(1); opacity: 0.6; }
+.role-select { position: relative; display: inline-flex; align-items: center; flex: none; }
+.role-select select {
+  appearance: none; -webkit-appearance: none; height: 28px; padding: 0 26px 0 11px; border: 0; border-radius: 99px; cursor: pointer;
+  font: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink); background: var(--press); transition: background var(--t-fast);
+}
+.role-select select:hover { background: color-mix(in srgb, var(--ink) 12%, transparent); }
+.role-select select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.role-select svg { position: absolute; right: 9px; width: 12px; height: 12px; pointer-events: none; color: var(--ink-3); }
+.team-row .role-pill { flex: none; }
+.team-menu-gap { width: 32px; flex: none; }
+.role-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 16px; }
+.role-cards > div { display: grid; gap: 3px; padding: 12px 14px; border-radius: var(--r); background: var(--surface-2); }
+.role-cards b { font-size: 12.5px; font-weight: 650; }
+.role-cards span { font-size: 12px; color: var(--ink-3); }
+@media (max-width: 720px) { .role-cards { grid-template-columns: 1fr; } }
