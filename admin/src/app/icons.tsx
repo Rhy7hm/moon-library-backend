@@ -33,6 +33,7 @@ export const IDownload = (p: P) => (<svg {...base(p)}><path d="M12 4.5V16M7.5 11
 export const IPlus = (p: P) => (<svg {...base(p)}><path d="M12 5v14M5 12h14" /></svg>);
 export const IX = (p: P) => (<svg {...base(p)}><path d="M6 6l12 12M18 6 6 18" /></svg>);
 export const ICheck = (p: P) => (<svg {...base(p)}><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>);
+export const ICopy = (p: P) => (<svg {...base(p)}><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5.5 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v.5" /></svg>);
 export const IChevR = (p: P) => (<svg {...base(p)}><path d="m9.5 6 6 6-6 6" /></svg>);
 export const IChevD = (p: P) => (<svg {...base(p)}><path d="m6 9.5 6 6 6-6" /></svg>);
 export const IMore = (p: P) => (<svg {...base(p)}><circle cx="6" cy="12" r="1" fill="currentColor" /><circle cx="12" cy="12" r="1" fill="currentColor" /><circle cx="18" cy="12" r="1" fill="currentColor" /></svg>);
@@ -58,3 +59,7 @@ export const ISun = (p: P) => (<svg {...base(p)}><circle cx="12" cy="12" r="3.8"
 export const IMoonLine = (p: P) => (<svg {...base(p)}><path d="M19.5 14.5A7.5 7.5 0 1 1 9.5 4.5a6 6 0 0 0 10 10z" /></svg>);
 export const IAuto = (p: P) => (<svg {...base(p)}><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" /></svg>);
 export const IMoon = (p: P) => (<svg {...base(p)} fill="currentColor" stroke="none"><path d="M14.8 3.2a8.8 8.8 0 1 0 6 13.4 7.4 7.4 0 0 1-6-13.4z" /></svg>);
+export const IPin = (p: P) => (<svg {...base(p)}><path d="M9.5 3.5h5l-.8 5.2 3.3 3.3v1.5H7v-1.5l3.3-3.3z" /><path d="M12 13.5v7" /></svg>);
+export const IPinOff = (p: P) => (<svg {...base(p)}><path d="M9.5 3.5h5l-.8 5.2 3.3 3.3v1.5H7v-1.5l3.3-3.3z" /><path d="M12 13.5v7M4 4l16 16" /></svg>);
+export const IGrip = (p: P) => (<svg {...base(p)} fill="currentColor" stroke="none"><circle cx="9" cy="6.5" r="1.4" /><circle cx="15" cy="6.5" r="1.4" /><circle cx="9" cy="12" r="1.4" /><circle cx="15" cy="12" r="1.4" /><circle cx="9" cy="17.5" r="1.4" /><circle cx="15" cy="17.5" r="1.4" /></svg>);
+export const ITag = (p: P) => (<svg {...base(p)}><path d="M3.5 12.2V5a1.5 1.5 0 0 1 1.5-1.5h7.2a1.5 1.5 0 0 1 1 .44l7.4 7.4a1.5 1.5 0 0 1 0 2.12l-7.2 7.2a1.5 1.5 0 0 1-2.12 0l-7.4-7.4a1.5 1.5 0 0 1-.44-1z" /><circle cx="8.3" cy="8.3" r="1.4" /></svg>);

@@ -11,7 +11,7 @@ def test_admin_tree_shape(owner):
     i = item(owner, sub, "Daily Rebate")
     vid, keys, _ = upload(owner, i, "Daily Rebate_EN_CN.png", PNG, "en", ["en", "zh"], thumb=b"RIFF0000WEBPxxxx")
     t = owner.get("/api/admin/tree").get_json()
-    assert set(t) == {"folders", "items", "assetBase", "generatedAt", "user"}
+    assert set(t) == {"folders", "items", "tags", "assetBase", "generatedAt", "user"}
     fo = next(x for x in t["folders"] if x["id"] == f)
     assert fo["name"] == {"en": "Rebate", "zh": "返水", "ta": "ரிபேட்"} and fo["slug"] == "rebate" and fo["hidden"] is False and "createdAt" in fo
     ti = t["items"][0]

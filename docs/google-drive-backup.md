@@ -1,6 +1,6 @@
 # Google Drive backup — setup and how it works
 
-A one-way copy of every uploaded file into a Google Drive **Shared Drive**.
+A one-way copy of every uploaded file into Google Drive: your own Drive (Connect Google Drive) or a company **Shared Drive**.
 
 * The **admin panel is the only source**. The library never reads from Drive.
 * **Nothing done in Drive changes the admin panel or the library.**
@@ -14,7 +14,8 @@ A one-way copy of every uploaded file into a Google Drive **Shared Drive**.
 | Rename / move a folder or file | Renamed / moved to match |
 | Replace a version with a new upload | New file copied in; the old copy moves to `_Old versions` as `Banner_BM (replaced 2026-10-07).png` |
 | Restore an older version | It moves back from `_Old versions` (and the one it replaces goes there) |
-| Delete a file / version / card / folder, or empty the Trash | **Nothing** — Drive keeps its copy |
+| Move to the library's Trash | **Nothing** — Drive keeps its copy (it can still be restored) |
+| Delete for good (Delete now, Empty Trash, the 90-day clean-up) | **Nothing** by default — Drive keeps its copy. With **Remove from Drive when deleted for good** switched on (Settings → Connections → Google Drive, Owners): the copy goes to Google Drive's Trash on the next run, where Google keeps it 30 days |
 
 Rules:
 
@@ -32,9 +33,51 @@ Owners see the status in **Admin → Settings → Google Drive backup**:
 
 ## One-time setup
 
-Needs a Google Workspace account with **Shared drives**, and someone who can create a Google Cloud project.
+There are two ways to sign the backup in to Google Drive. Pick the one that matches the Drive you have:
 
-### 1. Google Cloud: project, API, robot account
+| Your Drive | Use | Sidebar of drive.google.com shows |
+|---|---|---|
+| **Personal** (a @gmail.com account, with or without a Google One plan) | **A. Connect Google Drive** — signs in as you | My Drive, Computers, Shared with me… (no "Shared drives") |
+| **Google Workspace** (company account) | **B. Robot account + Shared drive** | "Shared drives" |
+
+Google Cloud costs nothing for this: the Drive API is free, and no billing account or card is needed.
+If the console offers a free trial or asks for a payments profile, skip it.
+
+### A. Connect Google Drive (personal Drive)
+
+The backup copies into a "Moon Library backup" folder in the connected account's My Drive and uses
+that account's storage. It asks only for `drive.file`: it can see nothing in Drive except the files it
+creates itself.
+
+1. <https://console.cloud.google.com> → create a project (e.g. `library-backup`). No billing account.
+2. **APIs & Services → Library → Google Drive API → Enable**.
+3. **Google Auth Platform**:
+   * **Branding** — App name `Moon Library`, support email, home page `https://library.moon-interactive.com`,
+     privacy policy link, authorised domain `moon-interactive.com`, developer email. **No logo** (a logo
+     makes Google review the branding first).
+   * **Audience** — User type **External** → **Publish app** → status **In production**. ("Testing"
+     would make Google cancel the connection every 7 days.) The "requires verification" notice can be
+     ignored: `drive.file` is a non-sensitive scope.
+   * **Data Access** → Add or remove scopes → only `.../auth/drive.file` → Save.
+   * **Clients → Create client** → Web application. Authorised redirect URIs:
+     * `https://library.moon-interactive.com/api/admin/drive/callback`
+     * `http://127.0.0.1:5100/api/admin/drive/callback` and `http://localhost:5100/api/admin/drive/callback` (for your own computer)
+4. Put the client's ID and secret in `.env`, then restart:
+   ```
+   GDRIVE_CLIENT_ID=…apps.googleusercontent.com
+   GDRIVE_CLIENT_SECRET=…
+   ```
+5. As an Owner: **Settings → Connections → Connect Google Drive** → sign in with the account to back up
+   into → (if Google says it hasn't verified the app: **Advanced → Go to Moon Library**) → **Allow**.
+6. Press **Back up now**, or let the timer (cron, below) carry on.
+
+The permission is kept encrypted with the server's `SECRET_KEY` (change that key and you'll be asked to
+connect again). **Disconnect** cancels it at Google; what's already in Drive stays. Connecting the same
+account again keeps its folder; a different account starts a fresh folder and copies everything again.
+
+### B. Robot account + Shared drive (Google Workspace)
+
+#### 1. Google Cloud: project, API, robot account
 
 1. Go to <https://console.cloud.google.com/> and create a project, e.g. `moon-library-backup`.
 2. Go to **APIs & Services → Library**, search **Google Drive API**, then click **Enable**.
@@ -49,7 +92,7 @@ Needs a Google Workspace account with **Shared drives**, and someone who can cre
 
 > If the organisation blocks key creation (policy `iam.disableServiceAccountKeyCreation`), a Google Workspace admin has to allow it for this project.
 
-### 2. Google Drive: the Shared Drive and folder
+#### 2. Google Drive: the Shared Drive and folder
 
 1. In Google Drive, create a **Shared drive**, e.g. `Moon Library Backup`. You can also use an existing one.
 2. **Manage members** → add the robot's email as **Content manager**.
@@ -59,7 +102,7 @@ Needs a Google Workspace account with **Shared drives**, and someone who can cre
 
 A Shared Drive is required. Robot accounts have no Drive storage of their own, so they can't own files in a normal "My Drive". In a Shared Drive the files belong to the company and stay even if staff leave.
 
-### 3. Server: settings and cron
+#### 3. Server: settings and cron
 
 1. Copy the key file from step 1 to the server, outside the web folder, readable only by the app's user:
    ```bash
@@ -89,7 +132,8 @@ After setting it up:
 | | |
 |---|---|
 | `app/drive/backup.py` | the whole logic: compare library ↔ what's in Drive, then create / copy / rename / move; status for the admin panel |
-| `app/drive/google.py` | small Drive REST client (`requests` + `PyJWT`): service-account sign-in, folders, resumable uploads, PATCH, list |
+| `app/drive/google.py` | small Drive REST client (`requests` + `PyJWT`): signs in as the connected account or the service account; folders, resumable uploads, PATCH, list |
+| `app/drive/connect.py` | Connect Google Drive: Google sign-in (code → refresh token, kept encrypted), the backup folder in My Drive, disconnect |
 | `app/storage.py` → `read_range` | the only place the backup reads file bytes (R2, in 8 MB ranges) |
 | `app/cli.py` → `backup run` | what cron calls. The same `run_backup()` is used by "Back up now" |
 | `app/blueprints/admin_api.py` | `GET /api/admin/backup` status, `POST /api/admin/backup` Back up now — Owners only |

@@ -1,6 +1,8 @@
 """
 A very small Google Drive client (REST, no SDK) — ported from src/lib/server/drive/google.ts.
-Signs in as a Google service account ("robot" account); see docs/google-drive-backup.md.
+Signs in either as a person who pressed "Connect Google Drive" (connect.py — for a personal Drive),
+or as a Google service account ("robot" account, for a Workspace Shared drive); see
+docs/google-drive-backup.md. A connected account wins when both are set up.
 """
 from __future__ import annotations
 
@@ -24,6 +26,10 @@ class DriveConfig:
     root: str
     api: str
     token_url: str
+    # "robot" (service account) or "oauth" (a connected Google account)
+    mode: str = "robot"
+    refresh_token: str | None = None
+    who: str = ""  # the account it signs in as (shown in Settings)
 
 
 class DriveError(Exception):
@@ -36,6 +42,21 @@ class DriveError(Exception):
 def drive_config() -> DriveConfig | None:
     """None = backup not set up (the feature just stays off). Raises when the settings are broken."""
     cfg = current_app.config
+    from .connect import client, load
+
+    conn = load() if client() else None
+    if conn and conn.get("broken"):
+        raise RuntimeError("The Google Drive connection can't be read (the server's SECRET_KEY changed) — press Connect Google Drive again")
+    if conn:
+        return DriveConfig(
+            sa={},
+            root=conn["folder_id"],
+            api=(cfg.get("GDRIVE_API") or "https://www.googleapis.com").rstrip("/"),
+            token_url=cfg.get("GDRIVE_TOKEN_URL") or "https://oauth2.googleapis.com/token",
+            mode="oauth",
+            refresh_token=conn["refresh_token"],
+            who=conn.get("email") or "",
+        )
     err = getattr(cfg, "GDRIVE_SA_FILE_ERROR", None) or cfg.get("GDRIVE_SA_FILE_ERROR")
     raw = (cfg.get("GDRIVE_SA_JSON") or "").strip()
     root = (cfg.get("GDRIVE_FOLDER_ID") or "").strip()
@@ -54,6 +75,7 @@ def drive_config() -> DriveConfig | None:
         root=root,
         api=(cfg.get("GDRIVE_API") or "https://www.googleapis.com").rstrip("/"),
         token_url=cfg.get("GDRIVE_TOKEN_URL") or sa.get("token_uri") or "https://oauth2.googleapis.com/token",
+        who=sa["client_email"],
     )
 
 
@@ -84,6 +106,17 @@ class Drive:
         self.http = requests.Session()
 
     def _token(self) -> str:
+        if self.cfg.mode == "oauth":
+            with _tok_lock:
+                hit = _tokens.get("oauth")
+                if hit and hit[1] > time.time() + 60:
+                    return hit[0]
+            from .connect import access_token
+
+            tok, until = access_token(self.cfg.refresh_token or "")
+            with _tok_lock:
+                _tokens["oauth"] = (tok, until)
+            return tok
         sa = self.cfg.sa
         with _tok_lock:
             hit = _tokens.get(sa["client_email"])
@@ -129,6 +162,14 @@ class Drive:
     def create_folder(self, name: str, parent: str, props: dict) -> str:
         r = self._call("POST", "/drive/v3/files", {"fields": "id"}, {"name": name, "mimeType": FOLDER, "parents": [parent], "appProperties": props})
         return r.json()["id"]
+
+    def trash(self, file_id: str) -> None:
+        """Moves a file or folder into Drive's Trash (Google keeps it there for 30 days). Already gone is fine."""
+        try:
+            self._call("PATCH", f"/drive/v3/files/{requests.utils.quote(file_id, safe='')}", {"fields": "id"}, {"trashed": True})
+        except DriveError as e:
+            if e.status != 404:
+                raise
 
     def update(self, file_id: str, name: str | None = None, frm: str | None = None, to: str | None = None, description: str | None = None) -> None:
         """Renames and / or moves a file or folder."""

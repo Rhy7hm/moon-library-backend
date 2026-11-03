@@ -7,20 +7,26 @@ The admin API (ported from src/app/api/admin/*):
   GET  /api/admin/status      connection checks: MySQL, R2, Google Drive (Owners)
   GET  /api/admin/backup      Google Drive backup status (Owners)
   POST /api/admin/backup      "Back up now" (Owners)
+  POST /api/admin/backup/settings   { mirrorDeletes } — remove Drive copies of things deleted for good (Owners)
+  GET  /api/admin/drive/connect     → Google's sign-in page ("Connect Google Drive", Owners)
+  GET  /api/admin/drive/callback    ← Google sends the Owner back here; saves the connection
+  POST /api/admin/drive/disconnect  cancels it (Owners)
 """
 from __future__ import annotations
 
+import html
 import logging
 import tempfile
 
-from flask import Blueprint, current_app, request
+from flask import Blueprint, Response, current_app, redirect, request
 
-from ..auth import check_origin, require_user, write_log
+from ..auth import check_origin, get_user, require_user, write_log
 from ..services import activity
 from ..services.admin_ops import OPS, Ctx, check_key, http_meta
 from ..services.library import load_library
 from ..services.client_ops import CLIENT_OPS
-from ..services.manage_ops import MANAGE_OPS
+from ..services.manage_ops import MANAGE_OPS, pins_of
+from ..services.tag_ops import TAG_OPS
 from ..storage import storage
 from ..util import HttpError, json_response
 
@@ -41,18 +47,20 @@ def admin_get(op: str):
     except Exception:  # noqa: BLE001
         log.exception("cleanup")
     data = load_library(asset_base=current_app.config["ASSET_BASE"])
-    data["user"] = {"id": user.id, "username": user.username, "name": user.name, "role": user.role}
+    data["user"] = {"id": user.id, "username": user.username, "name": user.name, "role": user.role, "pins": pins_of(user.id)}
     return json_response(data, headers={"Cache-Control": "no-store"})
 
 
 @bp.post("/api/admin/<op>")
 def admin_post(op: str):
     check_origin()
-    user = require_user(activity.NEED.get(op, "editor"))
     body = request.get_json(silent=True, force=True)
     body = body if isinstance(body, dict) else {}
+    # Emptying the whole Trash stays Owner-only; deleting one item from Trash is Editor.
+    need = "owner" if op == "purge" and body.get("all") is True else activity.NEED.get(op, "editor")
+    user = require_user(need)
 
-    manage = MANAGE_OPS.get(op) or CLIENT_OPS.get(op)
+    manage = MANAGE_OPS.get(op) or CLIENT_OPS.get(op) or TAG_OPS.get(op)
     if manage:
         result = manage(user, body)
         return json_response(result if result is not None else {"ok": True})
@@ -165,3 +173,80 @@ def backup_now_route():
             },
         )
     return json_response({"result": result, "status": backup_status()})
+
+
+@bp.post("/api/admin/backup/settings")
+def backup_settings_route():
+    check_origin()
+    user = require_user("owner")
+    from ..drive.backup import backup_status, set_mirror_deletes
+
+    b = request.get_json(silent=True, force=True) or {}
+    if not isinstance(b.get("mirrorDeletes"), bool):
+        raise HttpError(400, "mirrorDeletes must be true or false")
+    set_mirror_deletes(b["mirrorDeletes"])
+    write_log(
+        user,
+        {
+            "kind": "security",
+            "action": "backup.settings",
+            "summary": f"{user.name} turned {'on' if b['mirrorDeletes'] else 'off'} removing Google Drive copies of files deleted for good",
+        },
+    )
+    return json_response({"status": backup_status()})
+
+
+# ---------------------------------------------------------------- Connect Google Drive (drive/connect.py)
+
+def _drive_page(message: str) -> Response:
+    """A plain page for when the Google sign-in can't finish (the person arrives here from Google, not from the app)."""
+    body = f"""<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Moon Library — Google Drive</title>
+<body style="font:15px/1.5 -apple-system,system-ui,sans-serif;max-width:520px;margin:12vh auto;padding:0 20px;color:#1d1d1f">
+<h1 style="font-size:22px">Google Drive wasn't connected</h1><p>{html.escape(message)}</p>
+<p><a href="/admin#/settings/connections">Back to Settings → Connections</a></p></body>"""
+    return Response(body, status=400, mimetype="text/html", headers={"Cache-Control": "no-store"})
+
+
+@bp.get("/api/admin/drive/connect")
+def drive_connect_route():
+    from ..drive.connect import ConnectError, start
+
+    user = get_user()
+    if not user or user.role != "owner":
+        return _drive_page("Only an Owner can connect Google Drive. Sign in as an Owner and try again.")
+    try:
+        return redirect(start(user.id), code=302)
+    except ConnectError as e:
+        return _drive_page(str(e))
+
+
+@bp.get("/api/admin/drive/callback")
+def drive_callback_route():
+    from ..drive.connect import ConnectError, finish
+
+    user = get_user()
+    if not user or user.role != "owner":
+        return _drive_page("Only an Owner can connect Google Drive. Sign in as an Owner and try again.")
+    if request.args.get("error"):
+        why = "you chose not to allow it" if request.args["error"] == "access_denied" else request.args["error"]
+        return _drive_page(f"Google didn't give access ({why}). Nothing was changed.")
+    try:
+        conn = finish(user.id, user.username, request.args.get("code", ""), request.args.get("state", ""))
+    except ConnectError as e:
+        return _drive_page(str(e))
+    write_log(user, {"kind": "security", "action": "drive.connect", "summary": f"{user.name} connected Google Drive ({conn['email']}) for the backup"})
+    return redirect("/admin#/settings/connections", code=302)
+
+
+@bp.post("/api/admin/drive/disconnect")
+def drive_disconnect_route():
+    check_origin()
+    user = require_user("owner")
+    from ..drive.connect import disconnect
+
+    conn = disconnect()
+    if conn:
+        write_log(user, {"kind": "security", "action": "drive.disconnect", "summary": f"{user.name} disconnected Google Drive ({conn.get('email') or 'unknown'}) — what's already there stays"})
+    return json_response({"ok": True})
+

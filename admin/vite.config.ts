@@ -19,7 +19,7 @@ const TYPES: Record<string, string> = { '.css': 'text/css', '.woff2': 'font/woff
 function rootPublicFiles(): Plugin {
   const pub = fileURLToPath(new URL('./public', import.meta.url));
   return {
-    name: 'm2-root-public-files',
+    name: 'moon-root-public-files',
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
         const path = decodeURIComponent((req.url ?? '').split('?')[0]);

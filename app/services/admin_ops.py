@@ -949,6 +949,18 @@ def purge(ctx: Ctx, b: Body):
     if b.get("all") is True:
         folder_ids = [r["id"] for r in q.all("SELECT id FROM folders WHERE deleted_at IS NOT NULL")]
         item_ids = [r["id"] for r in q.all("SELECT id FROM items WHERE deleted_at IS NOT NULL")]
+    else:
+        # only what's already in the Trash can be deleted for good: a folder that was trashed, or a
+        # file that was trashed itself or sits inside a trashed folder
+        if folder_ids:
+            binned = {r["id"] for r in q.all(f"SELECT id FROM folders WHERE deleted_at IS NOT NULL AND id IN ({in_list(len(folder_ids))})", *folder_ids)}
+            if set(folder_ids) - binned:
+                raise HttpError(400, "Only folders in the Trash can be deleted for good. Move it to the Trash first.")
+        if item_ids:
+            rows = q.all(f"SELECT id, folder_id, deleted_at FROM items WHERE id IN ({in_list(len(item_ids))})", *item_ids)
+            in_binned = set(subtree([r["id"] for r in q.all("SELECT id FROM folders WHERE deleted_at IS NOT NULL")]))
+            if len(rows) != len(set(item_ids)) or any(not r["deleted_at"] and r["folder_id"] not in in_binned for r in rows):
+                raise HttpError(400, "Only files in the Trash can be deleted for good. Move it to the Trash first.")
     all_folders = subtree(folder_ids) if folder_ids else []
     if all_folders:
         inner = q.all(f"SELECT id FROM items WHERE folder_id IN ({in_list(len(all_folders))})", *all_folders)

@@ -2,9 +2,11 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { fileUrl, mainFile, nameOf, titleOf, type Asset, type Folder } from './api';
 import { fmtDate, fmtSize, matchesType, typeOf, type TypeFilter } from './format';
-import { IClock, IDownload, IFolder, IGrid, IList, IMove, IPencil, IPlus, ISearch, IShare, ITrash, IUpload, IX } from './icons';
+import { IClock, IDownload, IFolder, IGrid, IList, IMove, IPencil, IPin, IPinOff, IPlus, ISearch, IShare, ITag, ITrash, IUpload, IX } from './icons';
 import { ClientAvatar, ShareWithClients } from './clients';
 import { useFileDrop, useStore } from './store';
+import { isEmpty, KIND_LABEL, KIND_QUERY, matches, parse, withFilter, without, type Token } from './search';
+import { TagDialog, tagQuery } from './tags';
 import { AssetBadges, AssetCard, Button, Crumbs, Empty, FolderPicker, FolderTile, PageHeader, PromptDialog, Segmented, Thumb, TypeIcon, type MenuItem } from './ui';
 
 type Sort = 'new' | 'old' | 'name' | 'size';
@@ -43,6 +45,11 @@ function downloadZip(assets: Asset[]) {
   window.location.href = `/zip?v=${ids}&o=1&name=${encodeURIComponent(name)}`;
 }
 
+/** A whole folder (and its sub-folders, laid out the same way) as one ZIP of the originals. */
+function downloadFolder(f: Folder) {
+  window.location.href = `/zip?folder=${encodeURIComponent(f.id)}&o=1`;
+}
+
 /* ---------------- dialogs a page can open ---------------- */
 
 type Ask =
@@ -50,7 +57,8 @@ type Ask =
   | { kind: 'rename-folder'; folder: Folder }
   | { kind: 'new-folder'; parentId: string | null }
   | { kind: 'move'; itemIds: string[]; folderIds: string[] }
-  | { kind: 'share'; target: 'folder' | 'item'; id: string; label: string }
+  | { kind: 'share'; target: 'folder' | 'item'; id: string; ids?: string[]; label: string }
+  | { kind: 'tag'; itemIds: string[] }
   | null;
 
 function useActions() {
@@ -78,16 +86,23 @@ function useActions() {
       : []),
   ];
 
-  const folderMenu = (f: Folder): MenuItem[] =>
-    s.canEdit
-      ? [
+  const folderMenu = (f: Folder): MenuItem[] => [
+    // pinning is personal, so everyone can, Viewers too
+    s.pins.includes(f.id)
+      ? { label: 'Unpin from sidebar', icon: <IPinOff />, onClick: () => s.togglePin(f.id) }
+      : { label: 'Pin to sidebar', icon: <IPin />, onClick: () => s.togglePin(f.id) },
+    { label: 'Download as ZIP', icon: <IDownload />, onClick: () => downloadFolder(f) },
+    ...(s.canEdit
+      ? ([
+          'sep',
           { label: 'Rename', icon: <IPencil />, onClick: () => setAsk({ kind: 'rename-folder', folder: f }) },
           { label: 'Move to…', icon: <IMove />, onClick: () => setAsk({ kind: 'move', itemIds: [], folderIds: [f.id] }) },
           { label: 'Share with client…', icon: <IShare />, onClick: () => setAsk({ kind: 'share', target: 'folder', id: f.id, label: nameOf(f) }) },
           'sep',
           { label: 'Move to Trash', icon: <ITrash />, danger: true, onClick: () => trashFolder(f) },
-        ]
-      : [];
+        ] as MenuItem[])
+      : []),
+  ];
 
   const dialogs =
     ask?.kind === 'rename-asset' ? (
@@ -128,7 +143,9 @@ function useActions() {
         onPick={(target) => (setAsk(null), s.run('move', { folderIds: ask.folderIds, itemIds: ask.itemIds, targetId: target }, 'Moved'))}
       />
     ) : ask?.kind === 'share' ? (
-      <ShareWithClients kind={ask.target} id={ask.id} label={ask.label} onClose={() => setAsk(null)} />
+      <ShareWithClients kind={ask.target} id={ask.id} ids={ask.ids} label={ask.label} onClose={() => setAsk(null)} />
+    ) : ask?.kind === 'tag' ? (
+      <TagDialog itemIds={ask.itemIds} onClose={() => setAsk(null)} />
     ) : null;
 
   return { assetMenu, folderMenu, setAsk, trashAssets, dialogs };
@@ -274,6 +291,16 @@ function FileGrid({ assets, showWhere, empty }: { assets: Asset[]; showWhere?: b
           </Button>
           {s.canEdit && (
             <>
+              <Button size="sm" icon={<ITag />} onClick={() => setAsk({ kind: 'tag', itemIds: selected.map((a) => a.id) })}>
+                Tag
+              </Button>
+              <Button
+                size="sm"
+                icon={<IShare />}
+                onClick={() => setAsk({ kind: 'share', target: 'item', id: selected[0].id, ids: selected.map((a) => a.id), label: titleOf(selected[0]) })}
+              >
+                Share
+              </Button>
               <Button size="sm" icon={<IMove />} onClick={() => setAsk({ kind: 'move', itemIds: selected.map((a) => a.id), folderIds: [] })}>
                 Move
               </Button>
@@ -314,17 +341,24 @@ export function FolderPage({ id }: { id: string | null }) {
         title={folder ? nameOf(folder) : 'Library'}
         sub={folder ? `${sub.length ? `${sub.length} ${sub.length === 1 ? 'folder' : 'folders'} · ` : ''}${assets.length} ${assets.length === 1 ? 'file' : 'files'} · ${fmtSize(assets.reduce((n, a) => n + (mainFile(a)?.size ?? 0), 0))}` : 'All your folders. Open one to upload and manage its files.'}
         actions={
-          s.canEdit && (
+          (s.canEdit || (id && folder)) && (
             <>
-              {id && folder && (
+              {id && folder && (assets.length > 0 || sub.length > 0) && (
+                <Button icon={<IDownload />} onClick={() => downloadFolder(folder)} title="Download everything in this folder as one ZIP">
+                  ZIP
+                </Button>
+              )}
+              {s.canEdit && id && folder && (
                 <Button icon={<IShare />} onClick={() => setAsk({ kind: 'share', target: 'folder', id, label: nameOf(folder) })}>
                   Share
                 </Button>
               )}
-              <Button icon={<IPlus />} onClick={() => setAsk({ kind: 'new-folder', parentId: id })}>
-                New folder
-              </Button>
-              {id && (
+              {s.canEdit && (
+                <Button icon={<IPlus />} onClick={() => setAsk({ kind: 'new-folder', parentId: id })}>
+                  New folder
+                </Button>
+              )}
+              {s.canEdit && id && (
                 <Button kind="primary" icon={<IUpload />} onClick={() => input.current?.click()}>
                   Upload
                 </Button>
@@ -410,17 +444,91 @@ export function RecentPage() {
   );
 }
 
+const DATE_CHOICES = [
+  { q: 'today', label: 'Today' },
+  { q: 'yesterday', label: 'Yesterday' },
+  { q: 'this week', label: 'This week' },
+  { q: 'last week', label: 'Last week' },
+  { q: 'this month', label: 'This month' },
+  { q: 'last month', label: 'Last month' },
+  { q: 'this year', label: 'This year' },
+];
+
 export function SearchPage({ q }: { q: string }) {
   const s = useStore();
-  const needle = q.trim().toLowerCase();
-  const folders = needle ? s.folders.filter((f) => nameOf(f).toLowerCase().includes(needle)) : [];
-  const list = needle
-    ? s.assets.filter((a) => titleOf(a).toLowerCase().includes(needle) || a.variants.some((v) => v.name.toLowerCase().includes(needle)) || (a.createdBy ?? '').toLowerCase().includes(needle))
-    : [];
+  const p = useMemo(() => parse(q), [q]);
+  const ctx = { path: s.path, tagById: s.tagById, clients: s.clients, sharedWith: s.sharedWith };
+  const any = !isEmpty(p);
+  const words = p.words.join(' ');
+  // folders only match plain words (filters like "images" or "#approved" are about files)
+  const folders = words && !p.kinds.length && !p.exts.length && !p.tags.length && !p.clients.length && !p.date ? s.folders.filter((f) => p.words.every((w) => nameOf(f).toLowerCase().includes(w))) : [];
+  const list = any ? s.assets.filter((a) => matches(a, p, ctx)) : [];
   const { folderMenu, dialogs } = useActions();
+  const go = (next: string) => s.go({ page: 'search', q: next });
+  const kindNow: string = p.kinds[0] ?? (p.exts.length ? 'ext' : '');
+  const tagNow = p.tags[0] ?? '';
+  const clientNow = p.clients[0] ?? '';
+  const dateNow = p.tokens.find((t) => t.type === 'date')?.text.toLowerCase() ?? '';
+  const chipLabel = (t: Token) =>
+    t.type === 'kind' ? KIND_LABEL[p.kinds[p.tokens.filter((x) => x.type === 'kind').indexOf(t)] ?? 'other']
+    : t.type === 'ext' ? t.text.replace(/^(ext:)?\.?/i, '').toUpperCase() + ' files'
+    : t.type === 'tag' ? `Tagged ${t.text.replace(/^(#|tag:)/i, '').replace(/"/g, '')}`
+    : t.type === 'client' ? `Shared with ${t.text.replace(/^client:/i, '').replace(/"/g, '')}`
+    : t.type === 'date' ? p.date?.label ?? t.text
+    : `“${t.text.replace(/"/g, '')}”`;
+
   return (
     <div className="page">
-      <PageHeader title={needle ? `Results for “${q.trim()}”` : 'Search'} sub={needle ? `${folders.length + list.length} found` : 'Type in the search box above.'} />
+      <PageHeader
+        title={any ? 'Search results' : 'Search'}
+        sub={any ? `${folders.length + list.length} ${folders.length + list.length === 1 ? 'result' : 'results'}` : 'Search names, file names, folders, tags and clients — or narrow it down below.'}
+      />
+      <div className="search-bar">
+        <div className="search-chips">
+          {p.tokens.map((t) => (
+            <span key={t.text} className={`search-chip ${t.type}`}>
+              {chipLabel(t)}
+              <button type="button" aria-label={`Remove ${chipLabel(t)}`} onClick={() => go(without(q, t))}>
+                <IX />
+              </button>
+            </span>
+          ))}
+          {!any && <span className="muted small">Try: <button className="link-btn" onClick={() => go('images this week')}>images this week</button> · <button className="link-btn" onClick={() => go('pdf')}>pdf</button>{s.tags[0] && <> · <button className="link-btn" onClick={() => go(tagQuery(s.tags[0].name))}>{tagQuery(s.tags[0].name)}</button></>}{s.clients[0] && <> · <button className="link-btn" onClick={() => go(`client:${s.clients[0].name.split(' ')[0].toLowerCase()}`)}>client:{s.clients[0].name.split(' ')[0].toLowerCase()}</button></>}</span>}
+        </div>
+        <div className="search-filters">
+          <select className="select sm" aria-label="Type" value={kindNow === 'ext' ? '' : kindNow} onChange={(e) => go(withFilter(q, 'kind', e.target.value ? KIND_QUERY[e.target.value as keyof typeof KIND_QUERY] : null))}>
+            <option value="">Any type</option>
+            {(Object.keys(KIND_QUERY) as (keyof typeof KIND_QUERY)[]).map((k) => (
+              <option key={k} value={k}>{KIND_LABEL[k]}</option>
+            ))}
+          </select>
+          <select className="select sm" aria-label="Date" value={DATE_CHOICES.some((d) => d.q === dateNow) ? dateNow : ''} onChange={(e) => go(withFilter(q, 'date', e.target.value || null))}>
+            <option value="">Any time</option>
+            {DATE_CHOICES.map((d) => (
+              <option key={d.q} value={d.q}>{d.label}</option>
+            ))}
+          </select>
+          {s.tags.length > 0 && (
+            <select className="select sm" aria-label="Tag" value={s.tags.find((t) => t.name.toLowerCase() === tagNow)?.id ?? ''} onChange={(e) => go(withFilter(q, 'tag', e.target.value ? tagQuery(s.tagById.get(e.target.value)!.name) : null))}>
+              <option value="">Any tag</option>
+              {s.tags.map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          )}
+          {s.clients.length > 0 && (
+            <select className="select sm" aria-label="Client" value={s.clients.find((c) => c.name.toLowerCase().includes(clientNow) && clientNow)?.id ?? ''} onChange={(e) => {
+              const c = s.clients.find((x) => x.id === e.target.value);
+              go(withFilter(q, 'client', c ? (/\s/.test(c.name) ? `client:"${c.name}"` : `client:${c.name}`) : null));
+            }}>
+              <option value="">Any client</option>
+              {s.clients.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          )}
+        </div>
+      </div>
       {folders.length > 0 && (
         <section>
           <h2 className="section-title">Folders</h2>
@@ -431,7 +539,7 @@ export function SearchPage({ q }: { q: string }) {
           </div>
         </section>
       )}
-      <FileGrid assets={list} showWhere empty={needle && !folders.length ? <Empty icon={<ISearch />} title="No results" text="Try another word — names, file names and uploaders are searched." /> : null} />
+      <FileGrid assets={list} showWhere empty={any && !folders.length ? <Empty icon={<ISearch />} title="Nothing matches" text="Take a filter off, or try another word." /> : null} />
       {dialogs}
     </div>
   );

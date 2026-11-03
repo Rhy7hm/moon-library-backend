@@ -9,9 +9,11 @@ service-account*.json
 __pycache__/
 *.pyc
 .pytest_cache/
-# admin build output and packages
+# admin and client website build output and packages
 admin/node_modules/
 admin/dist/
+client/node_modules/
+client/dist/
 # logs
 logs/
 *.log

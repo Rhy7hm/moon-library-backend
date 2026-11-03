@@ -34,8 +34,10 @@ from ..auth import (
     verify_password,
     write_log,
 )
+from ..avatar import decode_image_b64
 from ..db import q
-from ..util import HttpError, json_response, now
+from ..storage import IMMUTABLE, storage
+from ..util import HttpError, json_response, new_id, now
 
 bp = Blueprint("auth_api", __name__)
 NO_STORE = {"Cache-Control": "no-store"}
@@ -58,6 +60,25 @@ def _ui_lang(user_id: str):
         return None
 
 
+def _user_out(u, *, lang=None, avatar_key=None) -> dict:
+    """Public shape for the signed-in user (login / me / setup)."""
+    if hasattr(u, "id"):
+        out = {"id": u.id, "username": u.username, "name": u.name, "role": u.role, "avatarKey": getattr(u, "avatar_key", None)}
+    else:
+        out = {
+            "id": u["id"],
+            "username": u["username"],
+            "name": u.get("display_name") or u.get("name"),
+            "role": u["role"],
+            "avatarKey": u.get("avatar_key"),
+        }
+    if avatar_key is not None or "avatarKey" not in out:
+        out["avatarKey"] = avatar_key if avatar_key is not None else out.get("avatarKey")
+    if lang is not None:
+        out["lang"] = lang
+    return out
+
+
 def _with_cookie(data: dict, cookie: str):
     res = json_response(data, headers=NO_STORE)
     res.headers.add("Set-Cookie", cookie)
@@ -69,7 +90,7 @@ def auth_get(op: str):
     if op == "me":
         user = get_user()
         if user:
-            return json_response({"user": {"id": user.id, "username": user.username, "name": user.name, "role": user.role, "lang": _ui_lang(user.id)}}, headers=NO_STORE)
+            return json_response({"user": _user_out(user, lang=_ui_lang(user.id))}, headers=NO_STORE)
         n = q.first("SELECT COUNT(*) AS n FROM users")
         return json_response(
             {"user": None, "needsSetup": not (n or {}).get("n"), "setupNeedsKey": not current_app.config["ALLOW_SETUP_WITHOUT_KEY"]},
@@ -134,7 +155,7 @@ def auth_post(op: str):
         q.run("UPDATE users SET failed_count = 0, locked_until = NULL, last_login_at = ? WHERE id = ?", now(), u["id"])
         token = create_session(u["id"])
         write_log(u, {"kind": "security", "action": "login.ok", "summary": f"{u['display_name']} signed in"})
-        return _with_cookie({"user": {"id": u["id"], "username": u["username"], "name": u["display_name"], "role": u["role"], "lang": _ui_lang(u["id"])}}, session_cookie(token))
+        return _with_cookie({"user": _user_out(u, lang=_ui_lang(u["id"]))}, session_cookie(token))
 
     if op == "logout":
         user = get_user()
@@ -173,7 +194,35 @@ def auth_post(op: str):
                 raise HttpError(409, "An Owner account already exists. Please sign in.")
         token = create_session(uid)
         write_log({"id": uid, "username": username}, {"kind": "security", "action": "user.setup", "summary": f"{name} created the first Owner account"})
-        return _with_cookie({"user": {"id": uid, "username": username, "name": name, "role": "owner"}}, session_cookie(token))
+        return _with_cookie({"user": {"id": uid, "username": username, "name": name, "role": "owner", "avatarKey": None}}, session_cookie(token))
+
+    if op == "avatar":
+        user = require_user()
+        if user.id == "api":
+            raise HttpError(400, "Not for scripts")
+        raw, content_type, ext = decode_image_b64(b.get("data"))
+        key = f"u/{new_id(16)}.{ext}"
+        storage().put(key, raw, len(raw), content_type, None, IMMUTABLE)
+        old = q.first("SELECT avatar_key FROM users WHERE id = ?", user.id)
+        old_key = (old or {}).get("avatar_key")
+        q.run("UPDATE users SET avatar_key = ?, updated_at = ? WHERE id = ?", key, now(), user.id)
+        if old_key and old_key != key:
+            storage().delete([old_key])
+        write_log(user, {"kind": "content", "action": "user.avatar", "summary": f"{user.name} updated their profile photo"})
+        return json_response({"avatarKey": key})
+
+    if op == "avatar-clear":
+        user = require_user()
+        if user.id == "api":
+            raise HttpError(400, "Not for scripts")
+        old = q.first("SELECT avatar_key FROM users WHERE id = ?", user.id)
+        old_key = (old or {}).get("avatar_key")
+        if not old_key:
+            return json_response({"ok": True})
+        q.run("UPDATE users SET avatar_key = NULL, updated_at = ? WHERE id = ?", now(), user.id)
+        storage().delete([old_key])
+        write_log(user, {"kind": "content", "action": "user.avatar.clear", "summary": f"{user.name} removed their profile photo"})
+        return json_response({"ok": True})
 
     if op == "password":
         user = require_user()

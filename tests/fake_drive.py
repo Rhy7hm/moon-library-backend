@@ -1,6 +1,8 @@
 """
 A pretend Google sign-in + Drive API for the backup tests: folders, resumable uploads, PATCH
 renames / moves, list, and switches to make it fail or to bin a file. Never used in production.
+Signs in robot accounts (JWT) and people ("Connect Google Drive": code → refresh token → access
+token, revoke); a person's own files live in "MYROOT" (My Drive), a Shared drive's in "ROOT".
 """
 from __future__ import annotations
 
@@ -25,6 +27,12 @@ class FakeDrive:
         self.skip = 0  # parts to accept before failing
         self.lock = threading.Lock()
         self.files["ROOT"] = {"id": "ROOT", "name": "Moon Library backup", "mimeType": "application/vnd.google-apps.folder", "parents": ["SHARED"], "appProperties": {}, "trashed": False, "driveId": "SHARED"}
+        self.files["MYROOT"] = {"id": "MYROOT", "name": "My Drive", "mimeType": "application/vnd.google-apps.folder", "parents": [], "appProperties": {}, "trashed": False, "driveId": None}
+        # people: the code Google hands back after "Allow", refresh tokens it gave out, who they are
+        self.good_code = "good-code"
+        self.user_email = "moon@example.com"
+        self.refresh: set[str] = set()
+        self.revoked: list[str] = []
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.port = self.server.server_address[1]
         self.url = f"http://127.0.0.1:{self.port}"
@@ -39,6 +47,11 @@ class FakeDrive:
             return True
         par = self.files.get((f.get("parents") or [None])[0])
         return bool(par) and n < 50 and self.trashed(par, n + 1)
+
+    def drive_of(self, parents) -> str | None:
+        """A new file is on the same drive as its folder (None = someone's My Drive)."""
+        par = self.files.get((parents or [None])[0])
+        return par.get("driveId") if par else "SHARED"
 
     def ours(self):
         return [f for f in self.files.values() if f.get("appProperties", {}).get("moonlib") == "1"]
@@ -74,6 +87,16 @@ class FakeDrive:
             def _route(self, p, q, raw):
                 if p == "/token":
                     form = {k: v[0] for k, v in parse_qs(raw.decode()).items()}
+                    if form.get("grant_type") == "authorization_code":
+                        if form.get("code") != fake.good_code or not form.get("client_secret"):
+                            return self._send(400, {"error": "invalid_grant"})
+                        rt = "r-" + secrets.token_hex(6)
+                        fake.refresh.add(rt)
+                        return self._send(200, {"access_token": "tok-1", "refresh_token": rt, "expires_in": 3600, "scope": "https://www.googleapis.com/auth/drive.file"})
+                    if form.get("grant_type") == "refresh_token":
+                        if form.get("refresh_token") not in fake.refresh:
+                            return self._send(400, {"error": "invalid_grant", "error_description": "Token has been expired or revoked."})
+                        return self._send(200, {"access_token": "tok-1", "expires_in": 3600})
                     try:
                         claims = jwt.decode(form.get("assertion", ""), options={"verify_signature": False})
                     except jwt.PyJWTError:
@@ -106,12 +129,22 @@ class FakeDrive:
                     if s["got"] >= s["total"]:
                         fid = secrets.token_hex(8)
                         data = b"".join(s["buf"])
-                        fake.files[fid] = {"id": fid, **s["meta"], "trashed": False, "size": len(data), "md5": hashlib.md5(data).hexdigest(), "driveId": "SHARED"}
+                        fake.files[fid] = {"id": fid, **s["meta"], "trashed": False, "size": len(data), "md5": hashlib.md5(data).hexdigest(), "driveId": fake.drive_of(s["meta"]["parents"])}
                         del fake.sessions[sid]
                         return self._send(200, {"id": fid})
                     return self._send(308, None, {"Range": f"bytes=0-{s['got'] - 1}"} if s["got"] else {})
+                if p == "/auth":
+                    # the sign-in page: pretend the person signed in and pressed Allow
+                    back = f"{q['redirect_uri']}?code={fake.good_code}&state={q['state']}"
+                    return self._send(302, None, {"Location": back})
+                if p == "/revoke":
+                    fake.refresh.discard(q.get("token", ""))
+                    fake.revoked.append(q.get("token", ""))
+                    return self._send(200, {})
                 if self.headers.get("Authorization") != "Bearer tok-1":
                     return self._send(401, {"error": {"message": "Invalid Credentials"}})
+                if p == "/drive/v3/about":
+                    return self._send(200, {"user": {"emailAddress": fake.user_email, "displayName": "Moon"}})
                 if q.get("supportsAllDrives") != "true":
                     return self._send(400, {"error": {"message": "supportsAllDrives missing"}})
                 if p == "/upload/drive/v3/files" and self.command == "POST":
@@ -128,10 +161,11 @@ class FakeDrive:
                     return self._send(200, {}, {"Location": f"{fake.url}/upload/session/{sid}"})
                 if p == "/drive/v3/files" and self.command == "POST":
                     meta = json.loads(raw)
-                    if (meta.get("parents") or [None])[0] not in fake.files:
+                    parents = meta.get("parents") or ["MYROOT"]  # no parent: the top of My Drive
+                    if parents[0] not in fake.files:
                         return self._send(404, {"error": {"message": "parent not found"}})
                     fid = secrets.token_hex(8)
-                    fake.files[fid] = {"id": fid, "name": meta["name"], "mimeType": meta.get("mimeType"), "parents": meta["parents"], "appProperties": meta.get("appProperties") or {}, "trashed": False, "driveId": "SHARED"}
+                    fake.files[fid] = {"id": fid, "name": meta["name"], "mimeType": meta.get("mimeType"), "parents": parents, "appProperties": meta.get("appProperties") or {}, "trashed": False, "driveId": fake.drive_of(parents)}
                     return self._send(200, {"id": fid})
                 if p == "/drive/v3/files" and self.command == "GET":
                     ours = [f for f in fake.ours() if not ("trashed = false" in q.get("q", "") and fake.trashed(f))]
@@ -154,6 +188,8 @@ class FakeDrive:
                             f["parents"] = [add]
                         if "name" in meta:
                             f["name"] = meta["name"]
+                        if "trashed" in meta:
+                            f["trashed"] = bool(meta["trashed"])
                         return self._send(200, {"id": f["id"]})
                 return self._send(404, {"error": {"message": f"no route {self.command} {p}"}})
 

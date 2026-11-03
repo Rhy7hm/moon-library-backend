@@ -8,7 +8,7 @@ export const ctx: ApiCtx = { base: '' };
 export { ApiError };
 
 export type Role = 'owner' | 'editor' | 'viewer';
-export type Me = { id: string; username: string; name: string; role: Role };
+export type Me = { id: string; username: string; name: string; role: Role; avatarKey?: string | null; lang?: string | null };
 
 export type FileRow = {
   id: string;
@@ -38,6 +38,8 @@ export type Asset = {
   deletedAt: number | null;
   status: 'live' | 'draft';
   variants: FileRow[];
+  /** tag ids */
+  tags?: string[];
 };
 
 export type Folder = {
@@ -52,14 +54,55 @@ export type Folder = {
   createdAt: number;
 };
 
-export type Tree = { folders: Folder[]; items: Asset[]; user: Me };
+export type Tag = { id: string; name: string; color: string | null };
+export type Tree = { folders: Folder[]; items: Asset[]; tags?: Tag[]; user: Me & { pins?: string[] } };
 
-export type Share = { id: string; kind: 'folder' | 'item' | 'link'; targetId: string | null; url: string | null; title: string | null; createdAt: number; createdBy: string | null };
+export type Share = { id: string; kind: 'folder' | 'item' | 'link'; targetId: string | null; url: string | null; title: string | null; createdAt: number; createdBy: string | null; expiresAt?: number | null };
 export type ClientLogin = { id: string; email: string; name: string; disabled: boolean; lastLoginAt: number | null; createdAt: number };
-export type Client = { id: string; name: string; email: string | null; notes: string | null; color: string | null; createdAt: number; createdBy: string | null; shares: Share[]; logins: ClientLogin[]; inboxFolderId: string | null };
+export type Client = { id: string; name: string; email: string | null; notes: string | null; color: string | null; avatarKey: string | null; createdAt: number; createdBy: string | null; shares: Share[]; logins: ClientLogin[]; inboxFolderId: string | null; homeFolderId: string | null };
 
 export const op = <T = { ok: boolean }>(name: string, body: unknown = {}) => call<T>(ctx, name, body);
 export const loadTree = () => call<Tree>(ctx, 'tree');
+export type Check = {
+  key: 'mysql' | 'r2' | 'drive';
+  name: string;
+  state: 'ok' | 'fail' | 'off';
+  ms: number;
+  summary?: string;
+  error?: string;
+  warning?: string;
+  note?: string;
+  link?: string;
+  /** Google Drive only: "Connect Google Drive" is set up, an account is connected, and which one */
+  canConnect?: boolean;
+  connected?: boolean;
+  account?: string | null;
+  facts?: { label: string; value: string | number; kind?: 'time' }[];
+};
+export type BackupStatus = {
+  configured: boolean;
+  configError?: string;
+  folderUrl?: string;
+  running: boolean;
+  lastRun: number | null;
+  lastOk: number | null;
+  lastError: { at: number; message: string } | null;
+  verifiedAt: number | null;
+  total: number;
+  backedUp: number;
+  waiting: number;
+  failing: { name: string; error: string; attempts: number; nextTry: number | null }[];
+  failed: number;
+  old: number;
+  /** remove Drive copies of things deleted for good */
+  mirrorDeletes?: boolean;
+};
+export type BackupResult = { configured: boolean; ran: boolean; created: number; copied: number; updated: number; toOld: number; removed?: number; failed: number; remaining: boolean; error?: string };
+export const backupStatus = () => call<BackupStatus>(ctx, 'backup');
+export const backupNow = () => call<{ result: BackupResult; status: BackupStatus }>(ctx, 'backup', {});
+export const backupSettings = (b: { mirrorDeletes: boolean }) => call<{ status: BackupStatus }>(ctx, 'backup/settings', b);
+export const driveDisconnect = () => call<{ ok: boolean }>(ctx, 'drive/disconnect', {});
+export const connectionStatus = () => call<{ checkedAt: number; checks: Check[] }>(ctx, 'status');
 export const loadClients = () => call<{ clients: Client[] }>(ctx, 'clients.list', {}).then((r) => r.clients);
 
 async function auth<T>(path: string, body?: unknown): Promise<T> {
@@ -85,6 +128,8 @@ export const login = (username: string, password: string) => auth<{ user: Me }>(
 export const logout = () => auth('logout', {});
 export const setup = (b: { name: string; username: string; password: string; key?: string }) => auth<{ user: Me }>('setup', b);
 export const changePassword = (current: string, next: string) => auth('password', { current, next });
+export const setMyAvatar = (data: string) => auth<{ avatarKey: string }>('avatar', { data });
+export const clearMyAvatar = () => auth<{ ok: boolean }>('avatar-clear', {});
 export const sessions = () => auth<{ sessions: { id: string; created_at: number; last_seen: number; ip: string | null; ua: string | null; current: boolean }[] }>('sessions');
 export const revokeSession = (id: string) => auth('revoke', { id });
 export const revokeOtherSessions = () => auth('revoke', { others: true });

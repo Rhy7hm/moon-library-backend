@@ -1,12 +1,23 @@
 /* Home, Trash, Insights, Activity, Team and Settings. */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { errText, mainFile, nameOf, op, titleOf, type Role } from './api';
+import { assetSize, errText, mainFile, nameOf, op, titleOf, type Role } from './api';
 import { fmtAgo, fmtDate, fmtSize, greeting, typeOf } from './format';
-import { IClock, IDoc, IFolder, IImage, IKey, IPen, IPlus, IPulse, IRestore, ITrash, IUpload, IUsers, IVideo } from './icons';
+import { IDoc, IImage, IKey, IPen, IPlus, IPulse, IRestore, ITrash, IUpload, IUsers, IVideo } from './icons';
+import { shatter } from './shatter';
+import { ShredDialog, type ShredItem } from './shredder';
 import { useStore } from './store';
-import { AssetCard, Button, ConfirmDialog, Dialog, Empty, FolderGlyph, PageHeader, Segmented, Thumb } from './ui';
+import { AssetCard, Button, ConfirmDialog, CopyButton, Dialog, Empty, FolderGlyph, PageHeader, Segmented, Thumb, UserAvatar } from './ui';
 
 /* ---------------- Home ---------------- */
+
+// the kinds of file in the overview's bar, with calm colours that work in light and dark
+const MIX = [
+  { key: 'image', label: 'Images', color: '#4c8dff' },
+  { key: 'video', label: 'Videos', color: '#9b7bff' },
+  { key: 'design', label: 'Design files', color: '#ff7a59' },
+  { key: 'document', label: 'Documents', color: '#f5b83d' },
+  { key: 'other', label: 'Other', color: '#a1a1aa' },
+] as const;
 
 export function HomePage() {
   const s = useStore();
@@ -15,40 +26,65 @@ export function HomePage() {
   const recent = s.assets.slice(0, 8);
   const week = s.assets.filter((a) => a.date > Date.now() - 7 * 864e5).length;
   const total = s.assets.reduce((n, a) => n + (mainFile(a)?.size ?? 0), 0);
+  const lastWeek = s.assets.filter((a) => a.date <= Date.now() - 7 * 864e5 && a.date > Date.now() - 14 * 864e5).length;
+  // how many files of each kind, and how much space each takes
   const byType = useMemo(() => {
-    const c = { image: 0, video: 0, document: 0, design: 0, other: 0 };
-    for (const a of s.assets) c[typeOf(mainFile(a))]++;
+    const c = Object.fromEntries(MIX.map((m) => [m.key, { n: 0, size: 0 }])) as Record<(typeof MIX)[number]['key'], { n: number; size: number }>;
+    for (const a of s.assets) {
+      const t = c[typeOf(mainFile(a))];
+      t.n++;
+      t.size += mainFile(a)?.size ?? 0;
+    }
     return c;
   }, [s.assets]);
+  const sharedFolders = new Set(s.clients.flatMap((c) => c.shares.filter((x) => x.kind === 'folder').map((x) => x.targetId))).size;
+  const delta = week - lastWeek;
   const top = s.children(null);
 
   return (
     <div className="page">
       <PageHeader title={greeting(s.me.name)} sub={week ? `${week} new ${week === 1 ? 'file' : 'files'} this week across ${top.length} ${top.length === 1 ? 'folder' : 'folders'}.` : 'Here’s your library at a glance.'} />
 
-      <div className="stats">
-        <button className="stat" onClick={() => s.go({ page: 'folder', id: null })}>
-          <span className="stat-icon blue"><IFolder /></span>
-          <strong>{s.assets.length}</strong>
-          <small>files · {fmtSize(total)}</small>
-        </button>
-        <button className="stat" onClick={() => s.go({ page: 'recent' })}>
-          <span className="stat-icon green"><IClock /></span>
-          <strong>{week}</strong>
-          <small>added this week</small>
-        </button>
-        <button className="stat" onClick={() => s.go({ page: 'folder', id: null })}>
-          <span className="stat-icon gray"><IFolder /></span>
-          <strong>{s.folders.length}</strong>
-          <small>{s.folders.length === 1 ? 'folder' : 'folders'}</small>
-        </button>
-        <div className="stat types">
-          <span title="Images"><IImage /> {byType.image}</span>
-          <span title="Videos"><IVideo /> {byType.video}</span>
-          <span title="Documents"><IDoc /> {byType.document}</span>
-          <span title="Design files"><IPen /> {byType.design}</span>
+      <section className="overview" aria-label="Library overview">
+        <div className="ov-metrics">
+          <button className="ov-metric" onClick={() => s.go({ page: 'folder', id: null })}>
+            <span className="ov-label">Files</span>
+            <span className="ov-value">{s.assets.length.toLocaleString()}</span>
+            <span className="ov-sub">{fmtSize(total)} in total</span>
+          </button>
+          <button className="ov-metric" onClick={() => s.go({ page: 'recent' })}>
+            <span className="ov-label">Added this week</span>
+            <span className="ov-value">{week.toLocaleString()}</span>
+            <span className={`ov-sub${delta > 0 ? ' up' : delta < 0 ? ' down' : ''}`}>
+              {!lastWeek && !week ? 'Nothing new yet' : delta === 0 ? 'Same as last week' : `${delta > 0 ? '+' : '−'}${Math.abs(delta)} vs last week`}
+            </span>
+          </button>
+          <button className="ov-metric" onClick={() => s.go({ page: 'folder', id: null })}>
+            <span className="ov-label">Folders</span>
+            <span className="ov-value">{s.folders.length.toLocaleString()}</span>
+            <span className="ov-sub">{sharedFolders ? `${sharedFolders} shared with clients` : 'None shared with clients'}</span>
+          </button>
         </div>
-      </div>
+        {s.assets.length > 0 && (
+          <div className="ov-mix">
+            <div className="ov-bar" role="img" aria-label={MIX.filter((m) => byType[m.key].n).map((m) => `${byType[m.key].n} ${m.label.toLowerCase()}`).join(', ')}>
+              {MIX.filter((m) => byType[m.key].size > 0).map((m) => (
+                <i key={m.key} style={{ flexGrow: byType[m.key].size, background: m.color }} title={`${m.label}: ${fmtSize(byType[m.key].size)}`} />
+              ))}
+            </div>
+            <ul className="ov-legend">
+              {MIX.filter((m) => byType[m.key].n > 0).map((m) => (
+                <li key={m.key}>
+                  <span className="ov-dot" style={{ background: m.color }} />
+                  <span>{m.label}</span>
+                  <b>{byType[m.key].n}</b>
+                  <small>{fmtSize(byType[m.key].size)}</small>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </section>
 
       {s.canEdit && top.length > 0 && (
         <div className="quick-upload">
@@ -116,67 +152,157 @@ export function HomePage() {
 
 /* ---------------- Trash ---------------- */
 
+const KIND = { image: 'Image', video: 'Video', document: 'Document', design: 'Design file', other: 'File' } as const;
+
 export function TrashPage() {
   const s = useStore();
-  const [ask, setAsk] = useState<null | { all: true } | { folderIds: string[]; itemIds: string[]; label: string }>(null);
+  const [shred, setShred] = useState<null | { all: true } | { folderIds: string[]; itemIds: string[]; item: ShredItem }>(null);
+  // what the shredder just deleted: its rows break like glass once the window closes, and only then
+  // does the list reload (reloading straight away would make them blink out behind the window)
+  const purged = useRef<string[] | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const afterShred = async () => {
+    const keys = purged.current;
+    purged.current = null;
+    setShred(null);
+    if (!keys) return;
+    const els = keys.map((k) => listRef.current?.querySelector<HTMLElement>(`[data-key="${k}"]`)).filter((x): x is HTMLElement => !!x);
+    // several rows: each breaks a moment after the one above
+    await Promise.all(els.map((el, i) => new Promise<void>((done) => setTimeout(() => shatter(el, els.length > 1 ? { cols: 6, rows: 2 } : {}).then(done), i * 90))));
+    s.toast('Deleted for good', { tone: 'ok' });
+    await s.reload();
+  };
   const rows = [
     ...s.trashFolders.map((f) => ({ key: 'f' + f.id, at: f.deletedAt!, folder: f, asset: null })),
     ...s.trashAssets.map((a) => ({ key: 'i' + a.id, at: a.deletedAt!, folder: null, asset: a })),
   ].sort((a, b) => b.at - a.at);
   const daysLeft = (at: number) => Math.max(0, 90 - Math.floor((Date.now() - at) / 864e5));
+  const sizeOf = (r: (typeof rows)[number]) => (r.asset ? assetSize(r.asset) : 0);
+  const total = rows.reduce((n, r) => n + sizeOf(r), 0);
+  const soonest = rows.length ? Math.min(...rows.map((r) => daysLeft(r.at))) : 0;
+  const ids = (list: typeof rows) => ({ folderIds: list.flatMap((r) => (r.folder ? [r.folder.id] : [])), itemIds: list.flatMap((r) => (r.asset ? [r.asset.id] : [])) });
+  const restore = (list: typeof rows, label: string) => s.run('restore', ids(list), label);
+  const nameRow = (r: (typeof rows)[number]) => (r.asset ? titleOf(r.asset) : nameOf(r.folder!));
+
+  // newest first, in three groups
+  const day = 864e5;
+  const groups = [
+    { label: 'Today', rows: rows.filter((r) => Date.now() - r.at < day) },
+    { label: 'This week', rows: rows.filter((r) => Date.now() - r.at >= day && Date.now() - r.at < 7 * day) },
+    { label: 'Earlier', rows: rows.filter((r) => Date.now() - r.at >= 7 * day) },
+  ].filter((g) => g.rows.length);
 
   return (
     <div className="page">
       <PageHeader
         title="Trash"
         sub="Deleted files and folders stay here for 90 days, then they’re removed for good."
-        actions={s.isOwner && rows.length > 0 && <Button kind="danger" icon={<ITrash />} onClick={() => setAsk({ all: true })}>Empty Trash</Button>}
+        actions={
+          s.isOwner &&
+          rows.length > 0 && (
+            <Button kind="danger" icon={<ITrash />} onClick={() => setShred({ all: true })}>
+              Empty Trash
+            </Button>
+          )
+        }
       />
       {!rows.length ? (
         <Empty icon={<ITrash />} title="Trash is empty" text="Anything you delete shows up here first, so it can be put back." />
       ) : (
-        <div className="list-card">
-          {rows.map((r) => (
-            <div className="list-row" key={r.key}>
-              <span className="list-thumb">{r.asset ? <Thumb asset={r.asset} /> : <FolderGlyph f={r.folder!} />}</span>
-              <span className="list-text">
-                <strong>{r.asset ? titleOf(r.asset) : nameOf(r.folder!)}</strong>
-                <small>
-                  {r.asset ? 'File' : 'Folder'} · deleted {fmtAgo(r.at)} · {daysLeft(r.at)} days left
-                </small>
-              </span>
-              {s.canEdit && (
-                <Button size="sm" icon={<IRestore />} onClick={() => s.run('restore', { folderIds: r.folder ? [r.folder.id] : [], itemIds: r.asset ? [r.asset.id] : [] }, 'Restored')}>
-                  Restore
-                </Button>
-              )}
-              {s.isOwner && (
-                <Button
-                  size="sm"
-                  kind="plain"
-                  onClick={() =>
-                    setAsk({ folderIds: r.folder ? [r.folder.id] : [], itemIds: r.asset ? [r.asset.id] : [], label: r.asset ? titleOf(r.asset) : nameOf(r.folder!) })
-                  }
-                >
-                  Delete now
-                </Button>
-              )}
-            </div>
+        <div ref={listRef}>
+          <div className="trash-sum">
+            <span>
+              <b>{rows.length}</b> {rows.length === 1 ? 'item' : 'items'}
+              {total > 0 && <> · {fmtSize(total)}</>} · the next one is removed in <b>{soonest}</b> {soonest === 1 ? 'day' : 'days'}
+            </span>
+            {s.canEdit && rows.length > 1 && (
+              <Button size="sm" icon={<IRestore />} onClick={() => restore(rows, `Restored ${rows.length} items`)}>
+                Restore all
+              </Button>
+            )}
+          </div>
+          {groups.map((g) => (
+            <section key={g.label} className="trash-group">
+              <h3 className="trash-group-label">{g.label}</h3>
+              <div className="list-card">
+                {g.rows.map((r) => {
+                  const left = daysLeft(r.at);
+                  return (
+                    <div className={`list-row trash-row${left <= 7 ? ' soon' : ''}`} key={r.key} data-key={r.key}>
+                      <span className="list-thumb">{r.asset ? <Thumb asset={r.asset} /> : <FolderGlyph f={r.folder!} />}</span>
+                      <span className="list-text">
+                        <strong>{nameRow(r)}</strong>
+                        <small>
+                          {r.asset ? KIND[typeOf(mainFile(r.asset))] : 'Folder'}
+                          {sizeOf(r) > 0 && <> · {fmtSize(sizeOf(r))}</>} · deleted {fmtAgo(r.at)}
+                        </small>
+                      </span>
+                      <span className="trash-left" title={`Removed for good in ${left} day${left === 1 ? '' : 's'}`}>
+                        <span className="trash-meter">
+                          <i style={{ width: `${(left / 90) * 100}%` }} />
+                        </span>
+                        <small>{left} days left</small>
+                      </span>
+                      <span className="trash-actions">
+                        {s.canEdit && (
+                          <Button size="sm" icon={<IRestore />} onClick={() => restore([r], 'Restored')}>
+                            Restore
+                          </Button>
+                        )}
+                        {/* Owners and Editors can delete one thing for good; emptying all of the Trash is Owner-only */}
+                        {s.canEdit && (
+                          <Button
+                            size="sm"
+                            kind="danger"
+                            icon={<ITrash />}
+                            onClick={() =>
+                              setShred({
+                                ...ids([r]),
+                                item: {
+                                  title: nameRow(r),
+                                  meta: r.asset ? `${KIND[typeOf(mainFile(r.asset))]} · ${fmtSize(sizeOf(r))}` : 'Folder and everything in it',
+                                  thumb: r.asset ? <Thumb asset={r.asset} /> : <FolderGlyph f={r.folder!} />,
+                                },
+                              })
+                            }
+                          >
+                            Delete now
+                          </Button>
+                        )}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
           ))}
         </div>
       )}
-      {ask && (
-        <ConfirmDialog
-          title={'all' in ask ? 'Empty Trash?' : 'Delete for good?'}
-          text={'all' in ask ? 'Everything in the Trash is removed permanently. This can’t be undone.' : `“${ask.label}” is removed permanently. This can’t be undone.`}
-          action={'all' in ask ? 'Empty Trash' : 'Delete'}
-          danger
-          onClose={() => setAsk(null)}
-          onConfirm={() => {
-            const body = 'all' in ask ? { all: true, folderIds: [], itemIds: [] } : { folderIds: ask.folderIds, itemIds: ask.itemIds };
-            setAsk(null);
-            s.run('purge', body, 'Deleted for good');
+      {shred && (
+        <ShredDialog
+          title={'all' in shred ? 'Empty Trash?' : 'Delete for good?'}
+          item={
+            'all' in shred
+              ? {
+                  title: 'Everything in Trash',
+                  meta: `${rows.length} ${rows.length === 1 ? 'item' : 'items'}${total ? ` · ${fmtSize(total)}` : ''}`,
+                  thumb: rows[0]?.asset ? <Thumb asset={rows[0].asset} /> : <ITrash />,
+                  stack: rows.length > 1 ? rows.length : undefined,
+                }
+              : shred.item
+          }
+          onShred={async () => {
+            const body = 'all' in shred ? { all: true, folderIds: [], itemIds: [] } : { folderIds: shred.folderIds, itemIds: shred.itemIds };
+            try {
+              await op('purge', body); // not s.run: that reloads the list at once
+              purged.current = 'all' in shred ? rows.map((r) => r.key) : [...shred.folderIds.map((id) => 'f' + id), ...shred.itemIds.map((id) => 'i' + id)];
+              return true;
+            } catch (e) {
+              s.toast(errText(e), { tone: 'err' });
+              return false;
+            }
           }}
+          onClose={afterShred}
         />
       )}
     </div>
@@ -361,7 +487,7 @@ export function ActivityPage() {
 
 /* ---------------- Team ---------------- */
 
-type User = { id: string; username: string; name: string; role: Role; disabled: number; last_login_at: number | null; sessions: number };
+type User = { id: string; username: string; name: string; role: Role; disabled: number; last_login_at: number | null; sessions: number; avatarKey?: string | null };
 const ROLE_TEXT: Record<Role, string> = { owner: 'Owner — everything, including team and Trash', editor: 'Editor — upload, organise and delete', viewer: 'Viewer — browse and download only' };
 
 export function TeamPage() {
@@ -389,7 +515,7 @@ export function TeamPage() {
         <div className="list-card">
           {users.map((u) => (
             <div className="list-row" key={u.id}>
-              <span className="avatar">{u.name.slice(0, 1).toUpperCase()}</span>
+              <UserAvatar user={u} />
               <span className="list-text">
                 <strong>
                   {u.name} {u.id === s.me.id && <em className="you">You</em>}
@@ -449,9 +575,27 @@ export function TeamPage() {
         <Dialog title="Share these sign-in details" onClose={() => setMade(null)} footer={<Button kind="primary" onClick={() => setMade(null)}>Done</Button>}>
           <p className="muted">Send them privately. They can change the password in Settings after signing in. It isn’t shown again.</p>
           <div className="cred">
-            <div><span>Address</span><b>{location.origin}/admin</b></div>
-            <div><span>ID</span><b>{made.username}</b></div>
-            <div><span>Password</span><b>{made.password}</b></div>
+            <div>
+              <span>Address</span>
+              <span className="cred-value">
+                <b>{location.origin}/admin</b>
+                <CopyButton value={`${location.origin}/admin`} label="Copy address" toastText="Address copied" />
+              </span>
+            </div>
+            <div>
+              <span>ID</span>
+              <span className="cred-value">
+                <b>{made.username}</b>
+                <CopyButton value={made.username} label="Copy ID" toastText="ID copied" />
+              </span>
+            </div>
+            <div>
+              <span>Password</span>
+              <span className="cred-value">
+                <b>{made.password}</b>
+                <CopyButton value={made.password} label="Copy password" toastText="Password copied" />
+              </span>
+            </div>
           </div>
           <Button onClick={() => navigator.clipboard?.writeText(`${location.origin}/admin\nID: ${made.username}\nPassword: ${made.password}`).then(() => s.toast('Copied', { tone: 'ok' }))}>Copy</Button>
         </Dialog>

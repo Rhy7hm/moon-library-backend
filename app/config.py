@@ -129,15 +129,26 @@ class Config:
                 sa = None
                 self.GDRIVE_SA_FILE_ERROR = f"GDRIVE_SA_FILE can't be read: {e}"
         self.GDRIVE_SA_JSON = sa
+        # ... or, for a personal Google account (Gmail + Google One), an Owner clicks "Connect Google
+        # Drive" in Settings → Connections; that needs the OAuth client from Google Cloud Console
+        self.GDRIVE_CLIENT_ID = _env("GDRIVE_CLIENT_ID")
+        self.GDRIVE_CLIENT_SECRET = _env("GDRIVE_CLIENT_SECRET")
+        # the address Google sends people back to; by default worked out from the request
+        # (https://<this site>/api/admin/drive/callback) — it must be listed on the OAuth client
+        self.GDRIVE_REDIRECT_URL = _env("GDRIVE_REDIRECT_URL")
         # tests only: a pretend Drive API / sign-in address
         self.GDRIVE_API = _env("GDRIVE_API")
         self.GDRIVE_TOKEN_URL = _env("GDRIVE_TOKEN_URL")
+        self.GDRIVE_AUTH_URL = _env("GDRIVE_AUTH_URL")
+        self.GDRIVE_REVOKE_URL = _env("GDRIVE_REVOKE_URL")
 
         # uploads: the admin panel sends at most 20 MB in one piece, or 10 MB parts
         self.MAX_UPLOAD_BODY = 95 * 1024 * 1024
         self.MAX_CONTENT_LENGTH = 96 * 1024 * 1024
         # the built admin panel (npm run build in admin/)
         self.ADMIN_DIST = _env("ADMIN_DIST") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "admin", "dist")
+        # the client website's build, served at /
+        self.CLIENT_DIST = _env("CLIENT_DIST") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "client", "dist")
 
     def as_dict(self) -> dict:
         return {k: getattr(self, k) for k in dir(self) if k.isupper()}

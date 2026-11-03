@@ -63,6 +63,10 @@ def _lang_index(lang: str) -> int:
 def load_library(asset_base: str) -> dict:
     folder_rows = q.all("SELECT id,parent_id,slug,name,sort,cover_item_id,icon,icon_bg,icon_fg,hidden,created_at,deleted_at FROM folders ORDER BY sort, created_at, id")
     item_rows = q.all("SELECT id,folder_id,title,pinned,created_at,created_by,deleted_at,sort,status,publish_at,hide_at FROM items ORDER BY id")
+    tag_rows = q.all("SELECT id, name, color FROM tags ORDER BY name")
+    tags_of: dict[str, list[str]] = {}
+    for r in q.all("SELECT item_id, tag_id FROM item_tags"):
+        tags_of.setdefault(r["item_id"], []).append(r["tag_id"])
     file_rows = q.all(
         "SELECT id,item_id,lang,extra_langs,kind,name,mime,size,width,height,duration,key_orig,key_opt,opt_mime,opt_size,key_thumb,key_poster,caption,focus_y,status FROM files ORDER BY id"
     )
@@ -127,11 +131,13 @@ def load_library(asset_base: str) -> dict:
             "status": "draft" if r["status"] == "draft" else "live",
             "publishAt": r["publish_at"],
             "hideAt": r["hide_at"],
+            "tags": tags_of.get(r["id"], []),
         }
         items.append(it)
 
     items.sort(key=cmp_to_key(default_item_order))
-    return {"folders": folders, "items": items, "assetBase": asset_base, "generatedAt": now()}
+    tags = [{"id": r["id"], "name": r["name"], "color": r["color"]} for r in tag_rows]
+    return {"folders": folders, "items": items, "tags": tags, "assetBase": asset_base, "generatedAt": now()}
 
 
 def file_keys(r: dict) -> list[str]:

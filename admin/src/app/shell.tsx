@@ -1,7 +1,10 @@
-/* The frame around every page: sidebar (navigation + folder tree), top bar (search, upload), sheet and toasts. */
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+/*
+ * The frame around every page: sidebar (navigation, your pinned folders, the folder tree), top bar
+ * (search, upload), sheet and toasts.
+ */
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { logout, nameOf, type Folder } from './api';
-import { IAuto, IBriefcase, IChart, IChevR, IClock, IFolder, IGear, IGrid, IHome, IMoon, IMoonLine, IPulse, ISearch, ISignOut, ISparkles, ISun, ITrash, IUsers } from './icons';
+import { IAuto, IBriefcase, IChart, IChevR, IClock, IFolder, IGear, IGrid, IGrip, IHome, IMoonLine, IPin, IPulse, ISearch, ISignOut, ISparkles, ISun, ITrash, IUsers, IX } from './icons';
 import { ActivityPage, HomePage, InsightsPage, TeamPage, TrashPage } from './pages';
 import { SettingsPage } from './settings';
 import { FolderPage, RecentPage, SearchPage } from './library';
@@ -11,7 +14,7 @@ import { ClientPage, ClientsPage } from './clients';
 import { useStore, type Route } from './store';
 import { gsap, pop, settle } from './motion';
 import { useTheme } from './theme';
-import { MenuButton, Toasts, UploadTray } from './ui';
+import { MenuButton, Toasts, UploadTray, UserAvatar } from './ui';
 
 function NavItem({ icon, label, active, onClick, count }: { icon: ReactNode; label: string; active: boolean; onClick: () => void; count?: number }) {
   return (
@@ -88,8 +91,114 @@ function TreeNode({ f, depth, current }: { f: Folder; depth: number; current: st
           )}
           <span>{nameOf(f)}</span>
         </button>
+        <button
+          className={`tree-pin${s.pins.includes(f.id) ? ' on' : ''}`}
+          aria-label={s.pins.includes(f.id) ? `Unpin ${nameOf(f)}` : `Pin ${nameOf(f)} to the sidebar`}
+          title={s.pins.includes(f.id) ? 'Unpin' : 'Pin to the top of the sidebar'}
+          onClick={() => s.togglePin(f.id)}
+        >
+          <IPin />
+        </button>
       </div>
       {open && kids.map((k) => <TreeNode key={k.id} f={k} depth={depth + 1} current={current} />)}
+    </>
+  );
+}
+
+/**
+ * Your pinned folders, in your order. Drag a row (or Alt + ↑ / ↓ on it) to move it; the rows glide to
+ * their new places. Saved on the server for you only, so it follows you to any computer.
+ */
+function Pinned({ current }: { current: string | null }) {
+  const s = useStore();
+  const [theme] = useTheme();
+  const [order, setOrder] = useState<string[] | null>(null); // while dragging
+  const [dragId, setDragId] = useState<string | null>(null);
+  const rows = useRef(new Map<string, HTMLDivElement>());
+  const tops = useRef(new Map<string, number>());
+  const ids = order ?? s.pins;
+
+  // glide: each row starts where it was and slides to where it now is
+  useLayoutEffect(() => {
+    const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    for (const [id, el] of rows.current) {
+      const top = el.offsetTop;
+      const was = tops.current.get(id);
+      if (was !== undefined && was !== top && !reduce) {
+        el.animate([{ transform: `translateY(${was - top}px)` }, { transform: 'none' }], { duration: 220, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' });
+      }
+      tops.current.set(id, top);
+    }
+  }, [ids.join()]);
+
+  if (!s.pins.length) return null;
+  const moveTo = (id: string, to: number, list = ids) => {
+    const next = list.filter((x) => x !== id);
+    next.splice(Math.max(0, Math.min(to, next.length)), 0, id);
+    return next;
+  };
+  const finish = () => {
+    if (order && order.join() !== s.pins.join()) s.setPins(order);
+    setOrder(null);
+    setDragId(null);
+  };
+  return (
+    <>
+      <div className="side-label">Pinned</div>
+      <div className="pins" role="list" aria-label="Pinned folders">
+        {ids.map((id, i) => {
+          const f = s.byId.get(id)!;
+          const above = s.path(id).slice(0, -1);
+          const name = nameOf(f);
+          return (
+            <div
+              key={id}
+              role="listitem"
+              ref={(el) => void (el ? rows.current.set(id, el) : rows.current.delete(id))}
+              className={`tree-row pin-row${current === id ? ' on' : ''}${dragId === id ? ' dragging' : ''}`}
+              draggable
+              onDragStart={(e) => {
+                setDragId(id);
+                setOrder(s.pins);
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', name);
+              }}
+              onDragOver={(e) => {
+                if (!dragId) return;
+                e.preventDefault();
+                if (dragId !== id) setOrder(moveTo(dragId, ids.indexOf(id)));
+              }}
+              onDrop={(e) => e.preventDefault()}
+              onDragEnd={finish}
+            >
+              <span className="pin-grip" aria-hidden>
+                <IGrip />
+              </span>
+              <button
+                className="tree-name"
+                onClick={() => s.go({ page: 'folder', id })}
+                title={[...above.map(nameOf), name].join(' / ')}
+                onKeyDown={(e) => {
+                  if (!e.altKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+                  e.preventDefault();
+                  s.setPins(moveTo(id, i + (e.key === 'ArrowUp' ? -1 : 1)));
+                }}
+              >
+                {theme === '3d' ? (
+                  <img className="tree-folder" src={`${import.meta.env.BASE_URL}nav/folder.webp`} alt="" draggable={false} />
+                ) : (
+                  <span className="tree-dot" style={{ background: f.iconBg || '#4aa3ff' }} />
+                )}
+                <span>{name}</span>
+                {above.length > 0 && <small className="pin-where">{nameOf(above[above.length - 1])}</small>}
+              </button>
+              <button className="pin-x" aria-label={`Unpin ${name}`} title="Unpin" onClick={() => s.togglePin(id)}>
+                <IX />
+              </button>
+            </div>
+          );
+        })}
+      </div>
     </>
   );
 }
@@ -177,7 +286,7 @@ export function Shell({ onSignedOut }: { onSignedOut: () => void }) {
   if (!s.tree) {
     return (
       <div className="boot">
-        <IMoon className="boot-mark" />
+        <img className="boot-mark" src={`${import.meta.env.BASE_URL}brand-mark.png`} alt="" width={34} height={34} draggable={false} />
       </div>
     );
   }
@@ -186,7 +295,9 @@ export function Shell({ onSignedOut }: { onSignedOut: () => void }) {
     <div className={`app${menu ? ' menu-open' : ''}`}>
       <aside className="side">
         <div className="brand">
-          <span className="brand-mark"><IMoon /></span>
+          <span className="brand-mark">
+            <img src={`${import.meta.env.BASE_URL}brand-mark.png`} alt="" width={28} height={28} draggable={false} />
+          </span>
           <span>Moon Library</span>
         </div>
         <nav className="nav" aria-label="Main">
@@ -196,6 +307,7 @@ export function Shell({ onSignedOut }: { onSignedOut: () => void }) {
           <NavMain src="clients" icon={<IBriefcase />} label="Clients" active={r.page === 'clients' || r.page === 'client'} onClick={nav({ page: 'clients' })} count={s.clients.length} />
           <NavMain src="trash" icon={<ITrash />} label="Trash" active={r.page === 'trash'} onClick={nav({ page: 'trash' })} count={s.trashAssets.length + s.trashFolders.length} />
         </nav>
+        <Pinned current={current} />
         <div className="side-label">Folders</div>
         <div className="tree">
           {s.children(null).map((f) => (
@@ -237,7 +349,7 @@ export function Shell({ onSignedOut }: { onSignedOut: () => void }) {
           <div className="topbar-right">
             <MenuButton
               label="Account"
-              icon={<span className="avatar">{s.me.name.slice(0, 1).toUpperCase()}</span>}
+              icon={<UserAvatar user={s.me} />}
               items={[
                 { label: `${s.me.name} · ${s.me.role}`, onClick: nav({ page: 'settings', tab: 'account' }) },
                 'sep',

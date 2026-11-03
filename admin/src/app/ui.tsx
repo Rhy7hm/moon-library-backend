@@ -1,10 +1,11 @@
 /* Building blocks shared by every page. Styles: app.css. */
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { adFormat } from '@/lib/adformat';
-import { extOf, fileUrl, mainFile, nameOf, titleOf, type Asset, type Folder } from './api';
+import { extOf, fileUrl, mainFile, nameOf, titleOf, type Asset, type Folder, type Me } from './api';
 import { isDesignFile } from './derive/derive-design';
 import { extColor, fmtDuration, fmtSize, typeOf } from './format';
-import { IAudio, ICheck, IChevR, IDoc, IFile, IFolder, IImage, IMore, IPen, IVideo, IX } from './icons';
+import { IAudio, ICheck, IChevR, ICopy, IDoc, IFile, IFolder, IImage, IMore, IPen, IVideo, IX } from './icons';
 import { useStore } from './store';
 import { useTheme } from './theme';
 
@@ -21,6 +22,58 @@ export function Button({
     <button type="button" className={`btn ${kind}${size ? ' ' + size : ''}${children ? '' : ' icon-only'}`} {...rest}>
       {icon}
       {children && <span>{children}</span>}
+    </button>
+  );
+}
+
+/** Staff avatar: photo when set, otherwise the first letter of the name. */
+export function UserAvatar({
+  user,
+  size = 'md',
+  previewUrl,
+}: {
+  user: Pick<Me, 'name'> & { avatarKey?: string | null };
+  size?: 'sm' | 'md' | 'lg';
+  previewUrl?: string | null;
+}) {
+  const cls = size === 'lg' ? 'avatar lg' : size === 'sm' ? 'avatar sm' : 'avatar';
+  const src = previewUrl || (user.avatarKey ? fileUrl(user.avatarKey) : '');
+  if (src) {
+    return (
+      <span className={`${cls} has-photo`}>
+        <img src={src} alt="" draggable={false} />
+      </span>
+    );
+  }
+  return <span className={cls}>{user.name.slice(0, 1).toUpperCase()}</span>;
+}
+
+/** Inline copy control: clipboard icon morphs into a check, then settles back. */
+export function CopyButton({ value, label = 'Copy', toastText = 'Copied' }: { value: string; label?: string; toastText?: string }) {
+  const s = useStore();
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  const copy = () => {
+    void navigator.clipboard?.writeText(value).then(() => {
+      setCopied(true);
+      s.toast(toastText, { tone: 'ok' });
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = setTimeout(() => setCopied(false), 1400);
+    });
+  };
+  return (
+    <button
+      type="button"
+      className={`copy-btn${copied ? ' is-copied' : ''}`}
+      aria-label={copied ? 'Copied' : label}
+      title={copied ? 'Copied' : label}
+      onClick={copy}
+    >
+      <span className="copy-btn-icons" aria-hidden>
+        <ICopy className="copy-icon" />
+        <ICheck className="check-icon" />
+      </span>
     </button>
   );
 }
@@ -49,53 +102,90 @@ export function Segmented<T extends string>({ value, options, onChange, label }:
 
 export type MenuItem = { label: string; icon?: ReactNode; onClick: () => void; danger?: boolean; disabled?: boolean; checked?: boolean } | { heading: string } | 'sep';
 
+/**
+ * A "…" button with a menu. The menu is drawn on the page's top layer (a portal on <body>), placed by
+ * the button and flipped above it when there's no room below — so cards, sticky bars and anything with
+ * its own layer can never cover it.
+ */
 export function MenuButton({ items, label = 'More', icon = <IMore />, align = 'right' }: { items: MenuItem[]; label?: string; icon?: ReactNode; align?: 'left' | 'right' }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left?: number; right?: number; up: boolean } | null>(null);
   useEffect(() => {
     if (!open) return;
-    const close = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    const close = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && !menu.current?.contains(e.target as Node) && setOpen(false);
     const esc = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    // the menu is pinned to the screen, so it closes when the page moves under it
+    const away = (e: Event) => !menu.current?.contains(e.target as Node) && setOpen(false);
     document.addEventListener('mousedown', close);
     document.addEventListener('keydown', esc);
+    window.addEventListener('scroll', away, true);
+    window.addEventListener('resize', away);
     return () => {
       document.removeEventListener('mousedown', close);
       document.removeEventListener('keydown', esc);
+      window.removeEventListener('scroll', away, true);
+      window.removeEventListener('resize', away);
     };
   }, [open]);
+  // place it under the button (or above, if it would run off the bottom), inside the window
+  useLayoutEffect(() => {
+    if (!open || !btn.current) return setPos(null);
+    const r = btn.current.getBoundingClientRect();
+    const h = menu.current?.offsetHeight ?? 0;
+    const w = menu.current?.offsetWidth ?? 200;
+    const up = r.bottom + 4 + h > innerHeight - 8 && r.top - 4 - h > 8;
+    const top = up ? r.top - 4 - h : Math.min(r.bottom + 4, innerHeight - 8 - h);
+    setPos(
+      align === 'right'
+        ? { top, right: Math.max(8, Math.min(innerWidth - r.right, innerWidth - 8 - w)), up }
+        : { top, left: Math.max(8, Math.min(r.left, innerWidth - 8 - w)), up },
+    );
+  }, [open, align]);
   const shown = items.filter((x, i, a) => x !== 'sep' || (i > 0 && i < a.length - 1 && a[i - 1] !== 'sep'));
   if (!shown.length) return null;
   return (
     <div className="menu-wrap" ref={ref} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
-      <button type="button" className="icon-btn" aria-label={label} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+      <button ref={btn} type="button" className="icon-btn" aria-label={label} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
         {icon}
       </button>
-      {open && (
-        <div className={`menu ${align}`} role="menu">
-          {shown.map((x, i) =>
-            x === 'sep' ? (
-              <hr key={i} />
-            ) : 'heading' in x ? (
-              <div key={i} className="menu-heading">
-                {x.heading}
-              </div>
-            ) : (
-              <button
-                key={i}
-                role={x.checked === undefined ? 'menuitem' : 'menuitemradio'}
-                aria-checked={x.checked}
-                className={x.danger ? 'danger' : ''}
-                disabled={x.disabled}
-                onClick={() => (setOpen(false), x.onClick())}
-              >
-                {x.icon}
-                <span>{x.label}</span>
-                {x.checked && <ICheck className="menu-check" />}
-              </button>
-            ),
-          )}
-        </div>
-      )}
+      {open &&
+        createPortal(
+          <div
+            ref={menu}
+            className={`menu floating ${align}${pos?.up ? ' up' : ''}`}
+            role="menu"
+            style={pos ? { top: pos.top, left: pos.left ?? 'auto', right: pos.right ?? 'auto' } : { visibility: 'hidden', top: 0, left: 0, right: 'auto' }}
+            onClick={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+          >
+            {shown.map((x, i) =>
+              x === 'sep' ? (
+                <hr key={i} />
+              ) : 'heading' in x ? (
+                <div key={i} className="menu-heading">
+                  {x.heading}
+                </div>
+              ) : (
+                <button
+                  key={i}
+                  role={x.checked === undefined ? 'menuitem' : 'menuitemradio'}
+                  aria-checked={x.checked}
+                  className={x.danger ? 'danger' : ''}
+                  disabled={x.disabled}
+                  onClick={() => (setOpen(false), x.onClick())}
+                >
+                  {x.icon}
+                  <span>{x.label}</span>
+                  {x.checked && <ICheck className="menu-check" />}
+                </button>
+              ),
+            )}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
@@ -329,6 +419,8 @@ export function AssetCard({
   where?: string;
 }) {
   const f = mainFile(asset);
+  const { tagById } = useStore();
+  const tags = (asset.tags ?? []).map((id) => tagById.get(id)).filter((t): t is NonNullable<typeof t> => !!t);
   return (
     <div
       className={`card${selected ? ' selected' : ''}`}
@@ -358,6 +450,16 @@ export function AssetCard({
           {where ? <span className="where">{where}</span> : <span>{f ? fmtSize(f.size) : '—'}</span>}
           {f?.w && f?.h ? <span>{f.w} × {f.h}</span> : null}
         </div>
+        {tags.length > 0 && (
+          <div className="card-tags">
+            {tags.slice(0, 2).map((t) => (
+              <span key={t.id} className="card-tag" style={{ ['--t' as string]: t.color || '#8e8e93' }}>
+                {t.name}
+              </span>
+            ))}
+            {tags.length > 2 && <span className="card-tag more">+{tags.length - 2}</span>}
+          </div>
+        )}
       </div>
       <div className="card-menu">
         <MenuButton items={menu} />

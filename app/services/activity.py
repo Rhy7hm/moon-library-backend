@@ -18,7 +18,8 @@ from .library import file_keys
 
 # lowest role allowed to run each admin operation (anything not listed needs Editor)
 NEED = {
-    "purge": "owner",
+    # purge of specific items is Editor; emptying the whole Trash (all: true) is checked in admin_api
+    "pins.set": "viewer",  # pinning folders in your own sidebar is personal, so every role may
     "users.list": "owner",
     "users.create": "owner",
     "users.update": "owner",

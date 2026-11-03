@@ -77,6 +77,28 @@ def test_admin_page_served_by_flask(app, client, tmp_path):
     app.config["ADMIN_DIST"] = old
 
 
+def test_client_site_served_at_root(app, client, tmp_path):
+    dist = tmp_path / "client-dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html><title>Moon Library</title><div id=root></div>")
+    (dist / "assets" / "index-xyz.js").write_text("console.log(2)")
+    old = app.config["CLIENT_DIST"]
+    app.config["CLIENT_DIST"] = str(dist)
+    try:
+        r = client.get("/")
+        assert r.status_code == 200 and b"id=root" in r.data and r.headers["Cache-Control"] == "no-store" and r.headers["X-Frame-Options"] == "DENY"
+        assert client.get("/assets/index-xyz.js").headers["Cache-Control"] == "public, max-age=31536000, immutable"
+        assert client.get("/assets/../index.html").status_code == 404 or b"id=root" not in client.get("/assets/%2e%2e/index.html").data
+        # the API and the admin keep their own addresses
+        assert client.get("/api/client/auth/me").get_json() == {"user": None}
+        assert client.get("/api/auth/me").get_json()["user"] is None
+    finally:
+        app.config["CLIENT_DIST"] = old
+    app.config["CLIENT_DIST"] = str(tmp_path / "missing")
+    assert client.get("/").status_code == 503
+    app.config["CLIENT_DIST"] = old
+
+
 def test_database_url_with_special_characters(monkeypatch):
     from app.config import database_url
 
@@ -124,3 +146,21 @@ def test_refuses_the_m2_database_and_bucket(monkeypatch):
     monkeypatch.setenv("R2_BUCKET_NAME", "moon-library")
     with pytest.raises(RuntimeError, match="M2 database"):
         Config()
+
+
+def test_pinned_folders_are_personal_and_ordered(app, client, owner):
+    from tests.conftest import folder, login, make_user, op
+
+    a, b, c = folder(owner, "Rebate"), folder(owner, "Brand"), folder(owner, "Video")
+    assert owner.get("/api/admin/tree").get_json()["user"]["pins"] == []
+    assert op(owner, "pins.set", {"folderIds": [c, a, c, "nope"]})["pins"] == [c, a]  # order kept, repeats and unknown dropped
+    assert owner.get("/api/admin/tree").get_json()["user"]["pins"] == [c, a]
+    # a Viewer can pin too, and their list is their own
+    make_user(app, "viewer1", role="viewer")
+    v = app.test_client()
+    login(v, "viewer1")
+    assert v.get("/api/admin/tree").get_json()["user"]["pins"] == []
+    assert op(v, "pins.set", {"folderIds": [b]})["pins"] == [b]
+    assert owner.get("/api/admin/tree").get_json()["user"]["pins"] == [c, a]
+    op(owner, "pins.set", {"folderIds": "x"}, status=400)
+    op(owner, "pins.set", {"folderIds": [f"f{i}" for i in range(31)]}, status=400)

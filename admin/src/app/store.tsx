@@ -4,7 +4,7 @@
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createItem, guessMime, kindOf, onSignedOut, uploadVersion } from '@/lib/upload-client';
-import { errText, loadClients, loadTree, op, type Asset, type Client, type Folder, type Me, type Tree } from './api';
+import { errText, loadClients, loadTree, op, type Asset, type Client, type Folder, type Me, type Tag, type Tree } from './api';
 import { deriveAudio, deriveImage, deriveVideo } from './derive/derive';
 import { deriveDesign, isDesignFile } from './derive/derive-design';
 
@@ -21,7 +21,7 @@ export type Route =
   | { page: 'insights' }
   | { page: 'activity' }
   | { page: 'team' }
-  | { page: 'settings'; tab: 'account' | 'appearance' | 'devices' };
+  | { page: 'settings'; tab: 'account' | 'appearance' | 'devices' | 'connections' };
 
 export function parseRoute(hash: string): Route {
   const [path, query] = hash.replace(/^#\/?/, '').split('?');
@@ -38,7 +38,7 @@ export function parseRoute(hash: string): Route {
     case 'team':
       return { page: a };
     case 'settings':
-      return { page: 'settings', tab: b === 'appearance' || b === 'devices' ? b : 'account' };
+      return { page: 'settings', tab: b === 'appearance' || b === 'devices' || b === 'connections' ? b : 'account' };
     case 'search':
       return { page: 'search', q: new URLSearchParams(query).get('q') ?? '' };
     default:
@@ -64,6 +64,7 @@ type Toast = { id: number; text: string; tone?: 'ok' | 'err'; undo?: () => void 
 
 type Store = {
   me: Me;
+  setMe: (patch: Partial<Me> | ((m: Me) => Me)) => void;
   tree: Tree | null;
   clients: Client[];
   /** clients a folder or file is shared with (directly, or through a folder above it) */
@@ -73,6 +74,9 @@ type Store = {
   trashFolders: Folder[];
   trashAssets: Asset[];
   byId: Map<string, Folder>;
+  /** every tag, by name; and a quick lookup by id */
+  tags: Tag[];
+  tagById: Map<string, Tag>;
   children: (id: string | null) => Folder[];
   assetsIn: (id: string | null) => Asset[];
   path: (id: string | null) => Folder[];
@@ -91,6 +95,10 @@ type Store = {
   run: <T>(name: string, body: unknown, done?: string, undo?: () => Promise<unknown>) => Promise<T | null>;
   canEdit: boolean;
   isOwner: boolean;
+  /** folders this person pinned to their sidebar, in their order (saved on the server, per person) */
+  pins: string[];
+  setPins: (ids: string[]) => void;
+  togglePin: (id: string) => void;
 };
 
 const Ctx = createContext<Store | null>(null);
@@ -110,13 +118,19 @@ function derive(file: File) {
 /** "summer-sale_IG-post.final.jpg" → "summer sale IG post.final" */
 const titleFromName = (name: string) => name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim() || name;
 
-export function StoreProvider({ me, onSignOut, children }: { me: Me; onSignOut: () => void; children: ReactNode }) {
+export function StoreProvider({ me: meProp, onSignOut, children }: { me: Me; onSignOut: () => void; children: ReactNode }) {
+  const [me, setMeState] = useState(meProp);
   const [tree, setTree] = useState<Tree | null>(null);
   const [clients, setClients] = useState<Client[]>([]);
   const [route, setRoute] = useState<Route>(() => parseRoute(location.hash));
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [sheet, setSheet] = useState<string | null>(null);
   const [uploads, setUploads] = useState<UploadJob[]>([]);
+
+  useEffect(() => setMeState(meProp), [meProp]);
+  const setMe = useCallback((patch: Partial<Me> | ((m: Me) => Me)) => {
+    setMeState((m) => (typeof patch === 'function' ? patch(m) : { ...m, ...patch }));
+  }, []);
 
   useEffect(() => {
     onSignedOut(onSignOut);
@@ -130,11 +144,13 @@ export function StoreProvider({ me, onSignOut, children }: { me: Me; onSignOut: 
   }, []);
   const dismiss = useCallback((id: number) => setToasts((t) => t.filter((x) => x.id !== id)), []);
 
+  const [pins, setPinsState] = useState<string[]>([]);
   const reload = useCallback(async () => {
     try {
       // the library must open even if the client list can't load
       const [t, c] = await Promise.all([loadTree(), loadClients().catch(() => [])]);
       setTree(t);
+      setPinsState(t.user.pins ?? []);
       setClients(c);
     } catch (e) {
       toast(errText(e), { tone: 'err' });
@@ -196,6 +212,8 @@ export function StoreProvider({ me, onSignOut, children }: { me: Me; onSignOut: 
       trashFolders,
       trashAssets,
       byId,
+      tags: tree?.tags ?? [],
+      tagById: new Map((tree?.tags ?? []).map((t) => [t.id, t])),
       children: (id: string | null) => kids.get(id) ?? [],
       assetsIn: (id: string | null) => (id ? inFolder.get(id) ?? [] : []),
       path,
@@ -289,8 +307,33 @@ export function StoreProvider({ me, onSignOut, children }: { me: Me; onSignOut: 
     [clients, tree, derived],
   );
 
+  // shown at once, saved in the background; if saving fails, the list goes back and says so
+  const setPins = useCallback(
+    (ids: string[]) => {
+      let before: string[] = [];
+      setPinsState((cur) => ((before = cur), ids));
+      op<{ pins: string[] }>('pins.set', { folderIds: ids }).then(
+        (r) => setPinsState(r.pins),
+        (e) => {
+          setPinsState(before);
+          toast(errText(e), { tone: 'err' });
+        },
+      );
+    },
+    [toast],
+  );
+  const togglePin = useCallback(
+    (id: string) => {
+      const on = pins.includes(id);
+      setPins(on ? pins.filter((x) => x !== id) : [...pins, id]);
+      toast(on ? 'Unpinned from the sidebar' : 'Pinned to the sidebar', { tone: 'ok' });
+    },
+    [pins, setPins, toast],
+  );
+
   const value: Store = {
     me,
+    setMe,
     tree,
     clients,
     sharedWith,
@@ -310,6 +353,10 @@ export function StoreProvider({ me, onSignOut, children }: { me: Me; onSignOut: 
     run,
     canEdit: me.role !== 'viewer',
     isOwner: me.role === 'owner',
+    // a pinned folder that's in Trash (or inside one that is) drops out until it's restored
+    pins: pins.filter((id) => derived.byId.has(id) && !derived.path(id).some((f) => f.deletedAt)),
+    setPins,
+    togglePin,
   };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

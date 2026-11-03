@@ -1,7 +1,10 @@
 """Clients, and sharing folders, files and links with them."""
+import base64
+
 from tests.conftest import folder, item, login, make_user, op, upload
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"c" * 300
+WEBP = b"RIFF\x00\x00\x00\x00WEBPVP8 " + b"x" * 40
 
 
 def clients(owner):
@@ -85,3 +88,22 @@ def test_roles(owner, app):
     op(editor, "clients.delete", {"id": cid}, status=403)
     op(owner, "clients.delete", {"id": cid})
     assert app.test_client().post("/api/admin/clients.list", json={}).status_code == 401
+
+
+def test_client_avatar(owner):
+    cid = op(owner, "clients.create", {"name": "Acme"})["id"]
+    assert clients(owner)["Acme"]["avatarKey"] is None
+    r = op(owner, "clients.setAvatar", {"id": cid, "data": base64.b64encode(WEBP).decode()})
+    key = r["avatarKey"]
+    assert key.startswith("c/") and key.endswith(".webp")
+    assert clients(owner)["Acme"]["avatarKey"] == key
+    assert owner.get("/f/" + key).headers["Content-Type"] == "image/webp"
+    # replace, then clear
+    r2 = op(owner, "clients.setAvatar", {"id": cid, "data": base64.b64encode(PNG).decode()})
+    assert r2["avatarKey"] != key and r2["avatarKey"].endswith(".png")
+    assert owner.get("/f/" + key).status_code == 404
+    op(owner, "clients.clearAvatar", {"id": cid})
+    assert clients(owner)["Acme"]["avatarKey"] is None
+    assert owner.get("/f/" + r2["avatarKey"]).status_code == 404
+    op(owner, "clients.setAvatar", {"id": cid, "data": base64.b64encode(b"not-an-image").decode()}, status=400)
+    op(owner, "clients.setAvatar", {"id": cid, "data": base64.b64encode(b"\x89PNG....").decode()}, status=400)

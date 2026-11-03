@@ -7,7 +7,9 @@ what's missing, so it is safe to run as often as you like and it picks up where 
   • renamed or moved folder / file → renamed / moved in Drive
   • replaced file                  → the old copy moves to "_Old versions", the new one is copied
   • restored older version         → moves back from "_Old versions"
-  • deleted in the admin panel     → left untouched in Drive
+  • deleted in the admin panel     → left untouched in Drive — unless "remove from Drive when deleted
+                                     for good" is on: then, once it's gone for good (Delete now, Empty
+                                     Trash, the 90-day clean-up), its copy goes to Drive's own Trash
 Nothing done in Drive ever changes the library. A daily check re-copies anything someone removed
 from the backup in Drive.
 
@@ -115,7 +117,18 @@ def _live_folders(rows: list[dict]) -> list[dict]:
 
 
 def _blank_result() -> dict:
-    return {"configured": False, "ran": False, "created": 0, "copied": 0, "updated": 0, "toOld": 0, "failed": 0, "remaining": False}
+    return {"configured": False, "ran": False, "created": 0, "copied": 0, "updated": 0, "toOld": 0, "removed": 0, "failed": 0, "remaining": False}
+
+
+MIRROR_KEY = "mirrorDeletes"  # drive_state: "1" = remove Drive copies of things deleted for good
+
+
+def mirror_deletes() -> bool:
+    return _get_state(MIRROR_KEY) == "1"
+
+
+def set_mirror_deletes(on: bool) -> None:
+    _set_state(MIRROR_KEY, "1" if on else "0")
 
 
 def run_backup(budget_ms: int) -> dict:
@@ -226,6 +239,12 @@ def _reconcile(cfg: DriveConfig, deadline: int, res: dict) -> None:
             res["failed"] += 1
             _error(f"Moving an old version: {getattr(e, 'message', None) or e}")
 
+    # ---- 2b. deleted for good (not in the library, not kept as an old version): to Drive's Trash, if asked
+    if mirror_deletes():
+        _remove_gone(drive, folders, filemap, fmap, deadline, res)
+        if res["remaining"]:
+            return
+
     # ---- 3. files in the library: rename / move what's there, copy what isn't
     to_copy = []
     for f in current.values():
@@ -268,6 +287,45 @@ def _reconcile(cfg: DriveConfig, deadline: int, res: dict) -> None:
         else:
             res["remaining"] = True
             return
+
+
+def _remove_gone(drive: Drive, folders: list, filemap: dict, fmap: dict, deadline: int, res: dict) -> None:
+    """
+    Copies of files and folders that have been deleted for good go to Drive's Trash. A file in the
+    library's Trash still has its row, and a replaced file still has its old-version row, so neither
+    counts as gone — only Delete now / Empty Trash / the 90-day clean-up make something gone.
+    """
+    exists = {r["key_orig"] for r in q.all("SELECT key_orig FROM files")} | {r["key_orig"] for r in q.all("SELECT key_orig FROM file_versions")}
+    for m in list(filemap.values()):
+        if m["key_orig"] in exists:
+            continue
+        if now() > deadline:
+            res["remaining"] = True
+            return
+        try:
+            if m["drive_id"] and m["state"] in ("done", "old"):
+                drive.trash(m["drive_id"])
+                res["removed"] += 1
+            q.run("DELETE FROM drive_files WHERE key_orig = ?", m["key_orig"])
+            filemap.pop(m["key_orig"], None)
+        except Exception as e:  # noqa: BLE001
+            res["failed"] += 1
+            _error(f"Removing “{m['name'] or 'a file'}” from Drive: {getattr(e, 'message', None) or e}")
+    still = {f["id"] for f in folders}
+    for fid, m in list(fmap.items()):
+        if fid == OLD or fid in still:
+            continue
+        if now() > deadline:
+            res["remaining"] = True
+            return
+        try:
+            if m.get("drive_id"):
+                drive.trash(m["drive_id"])
+            q.run("DELETE FROM drive_folders WHERE folder_id = ?", fid)
+            fmap.pop(fid, None)
+        except Exception as e:  # noqa: BLE001
+            res["failed"] += 1
+            _error(f"Removing the folder “{m.get('name') or ''}” from Drive: {getattr(e, 'message', None) or e}")
 
 
 def _copy_file(drive: Drive, f: dict, m: dict | None, parent: str, deadline: int) -> str:
@@ -434,4 +492,5 @@ def backup_status() -> dict:
         "failing": failing[:20],
         "failed": len(failing),
         "old": len([r for r in dfiles if r["state"] == "old"]),
+        "mirrorDeletes": state.get(MIRROR_KEY) == "1",
     }

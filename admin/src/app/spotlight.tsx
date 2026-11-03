@@ -1,6 +1,8 @@
 /*
  * Spotlight: the search panel (⌘K, "/" or the search pill). Results appear as you type, grouped into
- * Folders, Files, Clients and Actions; ↑ ↓ move, Enter opens, Esc closes. Animated with GSAP.
+ * Folders, Files, Tags, Clients and Actions; ↑ ↓ move, Enter opens, Esc closes. Animated with GSAP.
+ * Files use the same search as the search page (search.ts): words plus filters like "images",
+ * "pdf", "#approved", "client:acme", "this week".
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { mainFile, nameOf, titleOf } from './api';
@@ -8,7 +10,9 @@ import { ClientAvatar } from './clients';
 import { fmtDate, fmtSize } from './format';
 import { IBriefcase, IChart, IChevR, IClock, IFolder, IGear, IHome, IPulse, ISearch, ISparkles, ITrash, IUpload, IUsers, IX } from './icons';
 import { gsap, motionOK } from './motion';
+import { matches, parse } from './search';
 import { useStore, type Route } from './store';
+import { tagQuery } from './tags';
 import { FolderGlyph, Thumb } from './ui';
 
 type Result = { key: string; group: string; title: string; sub?: string; icon: ReactNode; run: () => void; keep?: boolean };
@@ -80,8 +84,12 @@ export function Spotlight({ open, onClose, onUpload }: { open: boolean; onClose:
       return [...rec, ...actions.slice(0, onUpload ? 5 : 4)];
     }
     const has = (t: string | null | undefined) => !!t && t.toLowerCase().includes(needle);
+    const p = parse(q);
+    const words = p.words;
+    const onlyWords = words.length > 0 && p.tokens.every((t) => t.type === 'word');
+    const ctx = { path: s.path, tagById: s.tagById, clients: s.clients, sharedWith: s.sharedWith };
     const folders = s.folders
-      .filter((f) => has(nameOf(f)))
+      .filter((f) => onlyWords && words.every((w) => nameOf(f).toLowerCase().includes(w)))
       .slice(0, 5)
       .map<Result>((f) => ({
         key: 'f:' + f.id,
@@ -92,7 +100,7 @@ export function Spotlight({ open, onClose, onUpload }: { open: boolean; onClose:
         run: go({ page: 'folder', id: f.id }),
       }));
     const files = s.assets
-      .filter((a) => has(titleOf(a)) || a.variants.some((v) => has(v.name)) || has(a.createdBy))
+      .filter((a) => matches(a, p, ctx))
       .slice(0, 8)
       .map<Result>((a) => {
         const f = mainFile(a);
@@ -109,13 +117,27 @@ export function Spotlight({ open, onClose, onUpload }: { open: boolean; onClose:
           run: () => s.openSheet(a.id),
         };
       });
+    const tags = s.tags
+      .filter((t) => has(t.name) || (needle.startsWith('#') && t.name.toLowerCase().includes(needle.slice(1).replace(/"/g, ''))))
+      .slice(0, 4)
+      .map<Result>((t) => {
+        const n = s.assets.filter((a) => a.tags?.includes(t.id)).length;
+        return {
+          key: 't:' + t.id,
+          group: 'Tags',
+          title: t.name,
+          sub: `${n} ${n === 1 ? 'file' : 'files'}`,
+          icon: <span className="sp-tag" style={{ background: t.color || '#8e8e93' }} />,
+          run: go({ page: 'search', q: tagQuery(t.name) }),
+        };
+      });
     const clients = s.clients
       .filter((c) => has(c.name) || has(c.email))
       .slice(0, 4)
       .map<Result>((c) => ({ key: 'c:' + c.id, group: 'Clients', title: c.name, sub: c.email || undefined, icon: <ClientAvatar c={c} size={26} />, run: go({ page: 'client', id: c.id }) }));
     const acts = actions.filter((a) => has(a.title) || has(a.sub)).slice(0, 4);
     const all: Result = { key: 'all', group: '', title: `Show all results for “${q.trim()}”`, icon: <ISearch />, run: go({ page: 'search', q: q.trim() }) };
-    return [...folders, ...files, ...clients, ...acts, all];
+    return [...folders, ...files, ...tags, ...clients, ...acts, all];
   }, [needle, q, s, recent, actions, onUpload]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // open / close
@@ -205,7 +227,7 @@ export function Spotlight({ open, onClose, onUpload }: { open: boolean; onClose:
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={onKey}
-            placeholder="Search files, folders, clients…"
+            placeholder="Search — try “images this week”, “pdf” or #approved"
             aria-label="Search"
             aria-activedescendant={results[sel] ? `sp-${sel}` : undefined}
             autoComplete="off"

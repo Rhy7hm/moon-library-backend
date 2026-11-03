@@ -52,6 +52,7 @@ class SessionUser:
     name: str
     role: str
     session_id: str | None
+    avatar_key: str | None = None
 
 
 # ---------------------------------------------------------------- crypto helpers
@@ -140,13 +141,13 @@ def get_user() -> SessionUser | None:
     auth = request.headers.get("Authorization") or ""
     token_cfg = current_app.config.get("ADMIN_API_TOKEN") or ""
     if auth.startswith("Bearer ") and len(token_cfg) >= 24 and hmac.compare_digest(auth[7:], token_cfg):
-        return SessionUser(id="api", username="api", name="Import script", role="owner", session_id=None)
+        return SessionUser(id="api", username="api", name="Import script", role="owner", session_id=None, avatar_key=None)
     token = request.cookies.get(_cookie())
     if not token:
         return None
     sid = sha256hex(token)
     row = q.first(
-        """SELECT s.id, s.last_seen, s.expires_at, s.revoked_at, u.id AS uid, u.username, u.display_name, u.role, u.disabled
+        """SELECT s.id, s.last_seen, s.expires_at, s.revoked_at, u.id AS uid, u.username, u.display_name, u.role, u.disabled, u.avatar_key
              FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?""",
         sid,
     )
@@ -155,7 +156,14 @@ def get_user() -> SessionUser | None:
         return None
     if t - row["last_seen"] > 5 * 60_000:
         q.run("UPDATE sessions SET last_seen = ? WHERE id = ?", t, sid)
-    return SessionUser(id=row["uid"], username=row["username"], name=row["display_name"], role=row["role"], session_id=sid)
+    return SessionUser(
+        id=row["uid"],
+        username=row["username"],
+        name=row["display_name"],
+        role=row["role"],
+        session_id=sid,
+        avatar_key=row.get("avatar_key"),
+    )
 
 
 def require_user(need: str = "viewer") -> SessionUser:

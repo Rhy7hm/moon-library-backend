@@ -9,7 +9,7 @@ import re
 from datetime import datetime, timezone
 
 from ..auth import ROLES, LOCK_AFTER, SessionUser, at_least, check_password_rules, hash_password, new_user_id, write_log
-from ..db import q, UPSERT_SETTING
+from ..db import in_list, q, UPSERT_SETTING
 from ..util import HttpError, is_num, now
 from .activity import UNDOABLE, undo_entry
 
@@ -44,7 +44,7 @@ def _dumps(v) -> str:
 
 def users_list(user: SessionUser, b: dict):
     rows = q.all(
-        """SELECT u.id, u.username, u.display_name AS name, u.role, u.disabled, u.locked_until, u.last_login_at, u.created_at, u.created_by,
+        """SELECT u.id, u.username, u.display_name AS name, u.role, u.disabled, u.locked_until, u.last_login_at, u.created_at, u.created_by, u.avatar_key AS avatarKey,
                   (SELECT COUNT(*) FROM sessions s WHERE s.user_id = u.id AND s.revoked_at IS NULL AND s.expires_at > ?) AS sessions
              FROM users u ORDER BY u.role = 'owner' DESC, u.role = 'editor' DESC, u.display_name""",
         now(),
@@ -142,12 +142,16 @@ def users_delete(user: SessionUser, b: dict):
     uid = str(b.get("id") if b.get("id") is not None else "")
     if uid == user.id:
         raise HttpError(400, "You can't delete your own account")
-    u = q.first("SELECT display_name, username, role FROM users WHERE id = ?", uid)
+    u = q.first("SELECT display_name, username, role, avatar_key FROM users WHERE id = ?", uid)
     if not u:
         raise HttpError(404, "Account not found")
     if u["role"] == "owner" and _active_owners(uid) == 0:
         raise HttpError(400, "There must always be at least one Owner")
-    q.batch([("DELETE FROM sessions WHERE user_id = ?", [uid]), ("DELETE FROM users WHERE id = ?", [uid])])
+    q.batch([("DELETE FROM sessions WHERE user_id = ?", [uid]), ("DELETE FROM settings WHERE `key` = ?", [_pins_key(uid)]), ("DELETE FROM users WHERE id = ?", [uid])])
+    if u.get("avatar_key"):
+        from ..storage import storage
+
+        storage().delete([u["avatar_key"]])
     write_log(user, {"kind": "security", "action": "user.delete", "summary": f"{user.name} deleted the account of {u['display_name']} ({u['username']})", "targetType": "user", "targetIds": [uid]})
     return {"ok": True}
 
@@ -298,6 +302,43 @@ def settings_set(user: SessionUser, b: dict):
     raise HttpError(400, "Unknown setting")
 
 
+# ---------------------------------------------------------------- pinned folders (per person)
+
+PINS_MAX = 30
+
+
+def _pins_key(user_id: str) -> str:
+    return f"pins:{user_id}"
+
+
+def pins_of(user_id: str) -> list[str]:
+    """The folders this person pinned to their sidebar, in their order (for the tree response)."""
+    r = q.first("SELECT value FROM settings WHERE `key` = ?", _pins_key(user_id))
+    try:
+        v = json.loads(r["value"]) if r else []
+    except ValueError:
+        return []
+    return [x for x in v if isinstance(x, str)] if isinstance(v, list) else []
+
+
+def pins_set(user: SessionUser, b: dict):
+    """{ folderIds: [...] } — the whole list, in order. Unknown folders are dropped; it's only a shortcut list."""
+    raw = b.get("folderIds")
+    if not isinstance(raw, list):
+        raise HttpError(400, "folderIds must be a list")
+    ids: list[str] = []
+    for x in raw:
+        if isinstance(x, str) and x and x not in ids:
+            ids.append(x[:64])
+    if len(ids) > PINS_MAX:
+        raise HttpError(400, f"You can pin up to {PINS_MAX} folders.")
+    if ids:
+        known = {r["id"] for r in q.all(f"SELECT id FROM folders WHERE id IN ({in_list(len(ids))})", *ids)}
+        ids = [x for x in ids if x in known]
+    q.run(UPSERT_SETTING, _pins_key(user.id), json.dumps(ids), now(), user.username)
+    return {"pins": ids}
+
+
 MANAGE_OPS = {
     "users.list": users_list,
     "users.create": users_create,
@@ -312,4 +353,5 @@ MANAGE_OPS = {
     "reports.storage": reports_storage,
     "settings.get": settings_get,
     "settings.set": settings_set,
+    "pins.set": pins_set,
 }

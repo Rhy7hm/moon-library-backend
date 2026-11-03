@@ -1,11 +1,12 @@
 /* The file sheet: slides in from the right with a big preview, details, versions and actions. */
 import { useEffect, useRef, useState } from 'react';
 import { adFormat } from '@/lib/adformat';
-import { errText, extOf, fileUrl, mainFile, nameOf, op, titleOf, type Asset } from './api';
+import { errText, extOf, fileUrl, mainFile, nameOf, op, titleOf, type Asset, type Tag } from './api';
 import { fmtDate, fmtDuration, fmtSize, typeOf } from './format';
 import { IDownload, IMove, IReplace, IRestore, ITrash, IX, IShare } from './icons';
 import { ClientAvatar, ShareWithClients } from './clients';
 import { useStore } from './store';
+import { TagChip, TagEditor, tagQuery } from './tags';
 import { Button, FolderPicker, Thumb } from './ui';
 
 type Version = { id: string; name: string; size: number; reason: string; replaced_at: number; replaced_by: string | null; key_thumb: string | null; key_orig: string };
@@ -70,6 +71,20 @@ export function AssetSheet() {
         ...(f.dur ? ([['Length', fmtDuration(f.dur)]] as [string, string][]) : []),
         ['File name', <span key="n" className="wrap">{f.name}</span>],
         ['Folder', path.map(nameOf).join(' › ') || '—'],
+        [
+          'Tags',
+          s.canEdit ? (
+            <TagEditor key="tg" itemIds={[asset.id]} />
+          ) : (asset.tags ?? []).length ? (
+            <span key="tg" className="shared-chips">
+              {(asset.tags ?? []).map((id) => s.tagById.get(id)).filter((t): t is Tag => !!t).map((t) => (
+                <TagChip key={t.id} tag={t} onClick={() => (s.openSheet(null), s.go({ page: 'search', q: tagQuery(t.name) }))} />
+              ))}
+            </span>
+          ) : (
+            'None'
+          ),
+        ],
         ['Added', `${fmtDate(asset.date, true)}${asset.createdBy ? ` by ${asset.createdBy}` : ''}`],
         [
           'Shared with',

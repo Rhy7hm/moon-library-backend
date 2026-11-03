@@ -44,7 +44,7 @@ def test_first_copy_mirrors_folders_and_is_repeatable(app, owner, drive):
     upload(owner, j, "Draft_EN.png", PNG + b"d")
     op(owner, "item.update", {"id": j, "status": "draft"})  # drafts are backed up too
     r = run(app)
-    assert r == {"configured": True, "ran": True, "created": 3, "copied": 2, "updated": 0, "toOld": 0, "failed": 0, "remaining": False}
+    assert r == {"configured": True, "ran": True, "created": 3, "copied": 2, "updated": 0, "toOld": 0, "removed": 0, "failed": 0, "remaining": False}
     files = drive_files(drive)
     assert drive_path(drive, files["Banner_BM.png"]) == "Rebate/Charts/Banner_BM.png"
     assert files["Banner_BM.png"]["md5"] == hashlib.md5(PNG).hexdigest()
@@ -149,7 +149,7 @@ def test_overlapping_runs(app, owner, drive):
     upload(owner, i, "a.png", PNG)
     # a run is going (its lock is still valid): the second exits at once
     run_sql(app, "INSERT INTO drive_state (`key`, value) VALUES ('lock', ?) ON DUPLICATE KEY UPDATE value = VALUES(value)", str(int(time.time() * 1000) + 60_000))
-    assert run(app) == {"configured": True, "ran": False, "created": 0, "copied": 0, "updated": 0, "toOld": 0, "failed": 0, "remaining": False}
+    assert run(app) == {"configured": True, "ran": False, "created": 0, "copied": 0, "updated": 0, "toOld": 0, "removed": 0, "failed": 0, "remaining": False}
     assert owner.get("/api/admin/backup").get_json()["running"] is True
     # an expired lock (crashed run) is taken over
     run_sql(app, "UPDATE drive_state SET value = '1' WHERE `key` = 'lock'")
@@ -212,3 +212,55 @@ def test_back_up_now_and_cli(app, owner, drive):
     assert res.exit_code == 0 and json.loads(res.output)["copied"] == 1
     st = app.test_cli_runner().invoke(args=["backup", "status"])
     assert json.loads(st.output)["backedUp"] == 2
+
+
+def test_remove_from_drive_when_deleted_for_good(app, owner, drive):
+    """Off by default (Drive keeps everything). On: only things deleted for good leave Drive — to its Trash."""
+    top = folder(owner, "Campaign")
+    sub = folder(owner, "Posters", top)
+    a = item(owner, top, "A")
+    b = item(owner, top, "B")
+    c = item(owner, sub, "C")
+    upload(owner, a, "a.png", PNG)
+    upload(owner, b, "b.png", PNG + b"b")
+    upload(owner, c, "c.png", PNG + b"c")
+    assert run(app)["copied"] == 3
+    files = drive_files(drive)
+
+    # off: deleting for good leaves Drive alone
+    op(owner, "trash", {"itemIds": [a]})
+    op(owner, "purge", {"itemIds": [a]})
+    r = run(app)
+    assert r["removed"] == 0 and not drive.files[files["a.png"]["id"]]["trashed"]
+    assert owner.get("/api/admin/backup").get_json()["mirrorDeletes"] is False
+
+    # on: what's already gone for good goes to Drive's Trash on the next run
+    st = owner.post("/api/admin/backup/settings", json={"mirrorDeletes": True}).get_json()["status"]
+    assert st["mirrorDeletes"] is True
+    r = run(app)
+    assert r["removed"] == 1 and drive.files[files["a.png"]["id"]]["trashed"] is True
+    assert sql(app, "SELECT COUNT(*) AS n FROM drive_files WHERE key_orig LIKE '%a.png'")[0]["n"] == 0
+
+    # only moved to the library's Trash: Drive keeps it (it can still be restored)
+    op(owner, "trash", {"itemIds": [b]})
+    run(app)
+    assert not drive.files[files["b.png"]["id"]]["trashed"]
+
+    # a whole folder deleted for good: its files and the folder itself go
+    poster_folder = drive.files[files["c.png"]["id"]]["parents"][0]
+    op(owner, "trash", {"folderIds": [sub]})
+    op(owner, "purge", {"folderIds": [sub]})
+    r = run(app)
+    assert r["removed"] == 1 and drive.files[files["c.png"]["id"]]["trashed"] and drive.files[poster_folder]["trashed"]
+    assert not drive.files[files["b.png"]["id"]]["trashed"]  # still only in the library's Trash
+
+    # the switch is the Owner's, and it's logged
+    from tests.conftest import login, make_user
+
+    make_user(app, "ed", role="editor")
+    ed = app.test_client()
+    login(ed, "ed")
+    assert ed.post("/api/admin/backup/settings", json={"mirrorDeletes": False}).status_code == 403
+    assert owner.post("/api/admin/backup/settings", json={"mirrorDeletes": "yes"}).status_code == 400
+    log = op(owner, "audit.list", {"kind": "security"})["entries"]
+    assert any(e["action"] == "backup.settings" for e in log)

@@ -29,7 +29,7 @@ from flask import Blueprint, current_app, request
 
 from ..auth import IDLE_MS, LOCK_AFTER, LOCK_MS, MAX_MS, _secure_attr, check_origin, check_password_rules, client_info, hash_password, new_token, sha256hex, verify_password, write_log
 from ..db import in_list, q
-from ..services import admin_ops
+from ..services import admin_ops, client_ops
 from ..services.admin_ops import Ctx, http_meta
 from ..storage import storage
 from ..util import HttpError, json_response, now
@@ -172,9 +172,14 @@ def password():
 def _scope(client_id: str) -> dict:
     """
     Everything shared with a client: shared folders with all their (not deleted) sub-folders, files in
-    them, single shared files, links. Nothing in the Trash, no unfinished uploads.
+    them, single shared files, links. Nothing in the Trash, no unfinished uploads, and nothing whose
+    share has passed its end date.
     """
-    shares = q.all("SELECT id, kind, target_id, url, title, created_at FROM client_shares WHERE client_id = ? ORDER BY created_at", client_id)
+    shares = q.all(
+        "SELECT id, kind, target_id, url, title, created_at FROM client_shares WHERE client_id = ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY created_at",
+        client_id,
+        now(),
+    )
     folders = q.all("SELECT id, parent_id, name, sort, created_at, updated_at, deleted_at FROM folders")
     by_id = {f["id"]: f for f in folders}
     kids: dict[str | None, list] = {}
@@ -281,12 +286,13 @@ def library():
 
 
 def _inbox(u: ClientUser, create: bool) -> str | None:
-    row = q.first("SELECT c.inbox_folder_id, f.deleted_at FROM clients c LEFT JOIN folders f ON f.id = c.inbox_folder_id WHERE c.id = ?", u.client_id)
-    if row and row["inbox_folder_id"] and not row["deleted_at"] and q.first("SELECT id FROM folders WHERE id = ?", row["inbox_folder_id"]):
+    row = q.first("SELECT inbox_folder_id FROM clients WHERE id = ?", u.client_id)
+    if row and row["inbox_folder_id"] and client_ops._live(row["inbox_folder_id"]):
         return row["inbox_folder_id"]
     if not create:
         return None
-    fid = admin_ops.folder_create(Ctx(f"client:{u.email}"), {"parentId": None, "name": {"en": f"From {u.client_name}"}})["id"]
+    by = f"client:{u.email}"
+    fid = admin_ops.folder_create(Ctx(by), {"parentId": client_ops.ensure_home(u.client_id, by), "name": {"en": f"From {u.client_name}"}})["id"]
     q.run("UPDATE clients SET inbox_folder_id = ? WHERE id = ?", fid, u.client_id)
     write_log({"id": None, "username": "system"}, {"kind": "content", "action": "clients.inbox", "summary": f"Created “From {u.client_name}” for files sent by the client", "folderId": fid})
     return fid

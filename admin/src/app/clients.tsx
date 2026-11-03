@@ -2,13 +2,15 @@
  * Clients: who they are, and what is shared with each of them (folders, files, links).
  * The client website (moon-library-client) shows each client their shared things; here the team
  * decides what that is, makes their logins, and sees the files they sent ("From the client").
+ * Each client has a folder in the library (Clients › <client>); "New folder" here makes one inside it.
  */
-import { useMemo, useState } from 'react';
-import { mainFile, nameOf, titleOf, type Asset, type Client, type ClientLogin, type Folder, type Share } from './api';
+import { useMemo, useRef, useState } from 'react';
+import { fileUrl, mainFile, nameOf, titleOf, type Asset, type Client, type ClientLogin, type Folder, type Share } from './api';
+import { encodeAvatar } from './avatar-encode';
 import { fmtAgo, fmtDate } from './format';
-import { IBriefcase, ICheck, IChevR, IExternal, IFolder, IKey, ILink, IPencil, IPlus, ISearch, IShare, ITrash, IUsers, IX } from './icons';
+import { IBriefcase, ICheck, IChevR, IClock, IDownload, IExternal, IFolder, IImage, IKey, ILink, IPencil, IPlus, ISearch, IShare, ITrash, IUsers, IX } from './icons';
 import { useStore } from './store';
-import { AssetCard, Button, ConfirmDialog, Dialog, Empty, FolderGlyph, PageHeader, Segmented, Thumb, type MenuItem } from './ui';
+import { AssetCard, Button, ConfirmDialog, CopyButton, Dialog, Empty, FolderGlyph, PageHeader, Segmented, Thumb, type MenuItem } from './ui';
 
 const COLORS = ['#0a84ff', '#30b0c7', '#34c759', '#ff9f0a', '#ff375f', '#bf5af2', '#5e5ce6', '#8e8e93'];
 const initials = (name: string) =>
@@ -19,7 +21,23 @@ const initials = (name: string) =>
     .map((w) => w[0]!.toUpperCase())
     .join('') || '?';
 
-export function ClientAvatar({ c, size = 40 }: { c: Pick<Client, 'name' | 'color'>; size?: number }) {
+export function ClientAvatar({
+  c,
+  size = 40,
+  previewUrl,
+}: {
+  c: Pick<Client, 'name' | 'color'> & { avatarKey?: string | null };
+  size?: number;
+  previewUrl?: string | null;
+}) {
+  const src = previewUrl || (c.avatarKey ? fileUrl(c.avatarKey) : '');
+  if (src) {
+    return (
+      <span className="client-avatar has-photo" style={{ width: size, height: size }}>
+        <img src={src} alt="" draggable={false} />
+      </span>
+    );
+  }
   return (
     <span className="client-avatar" style={{ ['--c' as string]: c.color || '#8e8e93', width: size, height: size, fontSize: size * 0.38 }}>
       {initials(c.name)}
@@ -27,20 +45,106 @@ export function ClientAvatar({ c, size = 40 }: { c: Pick<Client, 'name' | 'color
   );
 }
 
-/** What a client will see: files inside shared folders (and sub-folders), shared files, links. */
+/** What a client will see: files inside shared folders (and sub-folders), shared files, links — and
+ *  the newest few with a picture, for the card's cover. */
 function useShareSummary(c: Client) {
   const s = useStore();
   return useMemo(() => {
-    const folders = c.shares.filter((x) => x.kind === 'folder');
+    const live = c.shares.filter((x) => !ended(x));
+    const folders = live.filter((x) => x.kind === 'folder');
     const inside = new Set<string>();
     const walk = (id: string) => {
       for (const a of s.assetsIn(id)) inside.add(a.id);
       for (const k of s.children(id)) walk(k.id);
     };
     for (const f of folders) if (f.targetId) walk(f.targetId);
-    for (const x of c.shares) if (x.kind === 'item' && x.targetId && s.assets.some((a) => a.id === x.targetId)) inside.add(x.targetId);
-    return { folders: folders.length, files: inside.size, links: c.shares.filter((x) => x.kind === 'link').length };
+    for (const x of live) if (x.kind === 'item' && x.targetId && s.assets.some((a) => a.id === x.targetId)) inside.add(x.targetId);
+    const preview = s.assets
+      .filter((a) => inside.has(a.id) && (mainFile(a)?.thumb || mainFile(a)?.poster))
+      .sort((a, b) => b.date - a.date)
+      .slice(0, 3);
+    return { folders: folders.length, files: inside.size, links: live.filter((x) => x.kind === 'link').length, preview };
   }, [c, s]);
+}
+
+/* ---------------- share end dates ---------------- */
+
+const DAY = 864e5;
+/** true once a share's end date has passed (the client no longer sees it) */
+export const ended = (sh: Share) => !!sh.expiresAt && sh.expiresAt <= Date.now();
+const endOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59).getTime();
+const dateInput = (ms: number) => {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+/** "Until 12 Dec", "Ends today", "Ended 3 Oct" — or nothing for no end date. */
+export function UntilBadge({ sh }: { sh: Share }) {
+  if (!sh.expiresAt) return null;
+  const left = sh.expiresAt - Date.now();
+  const label = left <= 0 ? `Ended ${fmtDate(sh.expiresAt)}` : left < DAY ? 'Ends today' : `Until ${fmtDate(sh.expiresAt)}`;
+  return <em className={`until-badge${left <= 0 ? ' ended' : left < 7 * DAY ? ' soon' : ''}`}>{label}</em>;
+}
+
+/** How long the client can see something: no end date, a quick choice, or a picked date (to the end of that day). */
+export function UntilPicker({ value, onChange }: { value: number | null; onChange: (v: number | null) => void }) {
+  const quick = [
+    { label: 'No end date', days: 0 },
+    { label: '1 week', days: 7 },
+    { label: '30 days', days: 30 },
+    { label: '90 days', days: 90 },
+  ];
+  const [mode, setMode] = useState<number | 'date'>(() => (value ? 'date' : 0));
+  const pick = (days: number) => (setMode(days), onChange(days ? endOfDay(new Date(Date.now() + days * DAY)) : null));
+  return (
+    <div className="until">
+      <span className="until-label">Client can see it</span>
+      <div className="until-opts" role="radiogroup" aria-label="Client can see it">
+        {quick.map((o) => (
+          <button key={o.days} type="button" role="radio" aria-checked={mode === o.days} className={mode === o.days ? 'on' : ''} onClick={() => pick(o.days)}>
+            {o.days ? `For ${o.label}` : 'Always'}
+          </button>
+        ))}
+        <label className={`until-date${mode === 'date' ? ' on' : ''}`}>
+          <span>Until</span>
+          <input
+            type="date"
+            min={dateInput(Date.now() + DAY)}
+            value={value ? dateInput(value) : ''}
+            onChange={(e) => {
+              if (!e.target.value) return;
+              const [y, m, d] = e.target.value.split('-').map(Number);
+              setMode('date');
+              onChange(endOfDay(new Date(y, m - 1, d)));
+            }}
+          />
+        </label>
+      </div>
+      {value && <small className="muted">They'll stop seeing it after {new Date(value).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' })}.</small>}
+    </div>
+  );
+}
+
+/** Change (or clear) the end date of a share. */
+function UntilDialog({ c, sh, label, onClose }: { c: Client; sh: Share; label: string; onClose: () => void }) {
+  const s = useStore();
+  const [v, setV] = useState<number | null>(sh.expiresAt && !ended(sh) ? sh.expiresAt : null);
+  return (
+    <Dialog
+      title={`How long can ${c.name} see “${label}”?`}
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button kind="primary" onClick={async () => (await s.run('shares.expire', { clientId: c.id, ids: [sh.id], expiresAt: v }, v ? 'End date set' : 'End date removed')) && onClose()}>
+            Save
+          </Button>
+        </>
+      }
+    >
+      <UntilPicker value={v} onChange={setV} />
+    </Dialog>
+  );
 }
 
 /* ---------------- list ---------------- */
@@ -82,27 +186,67 @@ export function ClientsPage() {
   );
 }
 
+/** A client at a glance: a cover of what they can see, who they are, what's shared, and whether they use it. */
 function ClientCard({ c, onOpen }: { c: Client; onOpen: () => void }) {
+  const s = useStore();
   const sum = useShareSummary(c);
+  const live = c.logins.filter((l) => !l.disabled);
+  const lastIn = Math.max(0, ...c.logins.map((l) => l.lastLoginAt ?? 0));
+  const sent = c.inboxFolderId ? s.assetsIn(c.inboxFolderId).length : 0;
+  const color = c.color || '#8e8e93';
+  const stat = (n: number, one: string, many: string, icon: React.ReactNode) => (
+    <span className={`cc-stat${n ? '' : ' zero'}`}>
+      {icon}
+      <b>{n}</b> {n === 1 ? one : many}
+    </span>
+  );
   return (
-    <button className="client-card" onClick={onOpen}>
-      <ClientAvatar c={c} size={44} />
-      <span className="client-card-text">
-        <strong>{c.name}</strong>
-        <small>{c.email || 'No email'}</small>
+    <button className="client-card" onClick={onOpen} style={{ ['--c' as string]: color }}>
+      <span className={`cc-cover n${sum.preview.length}`} aria-hidden>
+        {sum.preview.length ? (
+          sum.preview.map((a) => (
+            <span key={a.id} className="cc-pic">
+              <Thumb asset={a} />
+            </span>
+          ))
+        ) : (
+          <span className="cc-cover-empty">
+            <IShare /> Nothing shared yet
+          </span>
+        )}
       </span>
-      <span className="client-card-stats">
-        <span>
-          <b>{sum.files}</b> {sum.files === 1 ? 'file' : 'files'}
+      <span className="cc-body">
+        <span className="cc-head">
+          <span className="cc-avatar">
+            <ClientAvatar c={c} size={52} />
+          </span>
+          {sent > 0 && (
+            <span className="cc-sent" title={`${sent} file${sent === 1 ? '' : 's'} sent by ${c.name}`}>
+              <IDownload /> {sent} from client
+            </span>
+          )}
         </span>
-        <span>
-          <b>{sum.folders}</b> {sum.folders === 1 ? 'folder' : 'folders'}
+        <span className="cc-name">
+          <strong>{c.name}</strong>
+          <small className={c.email ? '' : 'none'}>{c.email || 'No email yet'}</small>
         </span>
-        <span>
-          <b>{sum.links}</b> {sum.links === 1 ? 'link' : 'links'}
+        <span className="cc-stats">
+          {stat(sum.files, 'file', 'files', <IImage />)}
+          {stat(sum.folders, 'folder', 'folders', <IFolder />)}
+          {stat(sum.links, 'link', 'links', <ILink />)}
+        </span>
+        <span className="cc-foot">
+          <span className={`cc-dot ${live.length ? (lastIn ? 'on' : 'idle') : 'off'}`} />
+          <span className="cc-login">
+            {!c.logins.length
+              ? 'No website login yet'
+              : !live.length
+                ? 'Logins turned off'
+                : `${live.length} login${live.length === 1 ? '' : 's'} · ${lastIn ? `last visit ${fmtAgo(lastIn)}` : 'not signed in yet'}`}
+          </span>
+          <IChevR className="cc-go" />
         </span>
       </span>
-      <IChevR className="client-card-go" />
     </button>
   );
 }
@@ -115,14 +259,16 @@ export function ClientPage({ id }: { id: string }) {
   const [editing, setEditing] = useState(false);
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [making, setMaking] = useState(false);
   if (!c) {
     return (
       <Empty icon={<IBriefcase />} title="Client not found" text="They may have been removed." action={<Button onClick={() => s.go({ page: 'clients' })}>All clients</Button>} />
     );
   }
-  return <ClientBody c={c} onEdit={() => setEditing(true)} onAdd={() => setAdding(true)} onDelete={() => setDeleting(true)} modals={
+  return <ClientBody c={c} onEdit={() => setEditing(true)} onAdd={() => setAdding(true)} onNewFolder={() => setMaking(true)} onDelete={() => setDeleting(true)} modals={
     <>
       {editing && <ClientDialog client={c} onClose={() => setEditing(false)} />}
+      {making && <ClientFolderDialog c={c} onClose={() => setMaking(false)} />}
       {adding && <SharePicker client={c} onClose={() => setAdding(false)} />}
       {deleting && (
         <ConfirmDialog
@@ -141,13 +287,16 @@ export function ClientPage({ id }: { id: string }) {
   } />;
 }
 
-function ClientBody({ c, onEdit, onAdd, onDelete, modals }: { c: Client; onEdit: () => void; onAdd: () => void; onDelete: () => void; modals: React.ReactNode }) {
+function ClientBody({ c, onEdit, onAdd, onNewFolder, onDelete, modals }: { c: Client; onEdit: () => void; onAdd: () => void; onNewFolder: () => void; onDelete: () => void; modals: React.ReactNode }) {
   const s = useStore();
   const sum = useShareSummary(c);
   const folders = c.shares.filter((x) => x.kind === 'folder');
   const items = c.shares.filter((x) => x.kind === 'item');
   const links = c.shares.filter((x) => x.kind === 'link');
   const remove = (sh: Share, label: string) => s.run('shares.remove', { clientId: c.id, ids: [sh.id] }, `Stopped sharing “${label}”`);
+  const [until, setUntil] = useState<{ sh: Share; label: string } | null>(null);
+  const home = c.homeFolderId ? s.byId.get(c.homeFolderId) : undefined;
+  const inbox = c.inboxFolderId ? s.byId.get(c.inboxFolderId) : undefined;
 
   return (
     <div className="page">
@@ -174,6 +323,9 @@ function ClientBody({ c, onEdit, onAdd, onDelete, modals }: { c: Client; onEdit:
               Edit
             </Button>
             {s.isOwner && <Button kind="danger" icon={<ITrash />} aria-label="Remove client" onClick={onDelete} />}
+            <Button icon={<IFolder />} onClick={onNewFolder}>
+              New folder
+            </Button>
             <Button kind="primary" icon={<IPlus />} onClick={onAdd}>
               Share
             </Button>
@@ -193,11 +345,12 @@ function ClientBody({ c, onEdit, onAdd, onDelete, modals }: { c: Client; onEdit:
 
       <Logins c={c} />
 
-      {c.inboxFolderId && s.byId.get(c.inboxFolderId) && (
+      {(home || inbox) && (
         <section>
-          <h2 className="section-title">From the client</h2>
+          <h2 className="section-title">In the library</h2>
           <div className="folders">
-            <SharedFolder f={s.byId.get(c.inboxFolderId)} />
+            {home && <SharedFolder f={home} note="Their folder" />}
+            {inbox && <SharedFolder f={inbox} note="Files they sent you" />}
           </div>
         </section>
       )}
@@ -217,7 +370,15 @@ function ClientBody({ c, onEdit, onAdd, onDelete, modals }: { c: Client; onEdit:
               <div className="folders">
                 {folders.map((sh) => {
                   const f = sh.targetId ? s.byId.get(sh.targetId) : undefined;
-                  return <SharedFolder key={sh.id} f={f} onRemove={s.canEdit ? () => remove(sh, f ? nameOf(f) : 'folder') : undefined} />;
+                  return (
+                    <SharedFolder
+                      key={sh.id}
+                      f={f}
+                      share={sh}
+                      onUntil={s.canEdit && f ? () => setUntil({ sh, label: nameOf(f) }) : undefined}
+                      onRemove={s.canEdit ? () => remove(sh, f ? nameOf(f) : 'folder') : undefined}
+                    />
+                  );
                 })}
               </div>
             </section>
@@ -228,10 +389,17 @@ function ClientBody({ c, onEdit, onAdd, onDelete, modals }: { c: Client; onEdit:
               <div className="grid">
                 {items.map((sh) => {
                   const a = s.tree?.items.find((x) => x.id === sh.targetId);
-                  const menu: MenuItem[] = s.canEdit ? [{ label: 'Stop sharing', icon: <IX />, danger: true, onClick: () => remove(sh, a ? titleOf(a) : 'file') }] : [];
+                  const menu: MenuItem[] = s.canEdit
+                    ? [
+                        { label: sh.expiresAt ? 'Change end date…' : 'Set end date…', icon: <IClock />, onClick: () => setUntil({ sh, label: a ? titleOf(a) : 'file' }) },
+                        'sep',
+                        { label: 'Stop sharing', icon: <IX />, danger: true, onClick: () => remove(sh, a ? titleOf(a) : 'file') },
+                      ]
+                    : [];
                   return a ? (
-                    <div key={sh.id} className={a.deletedAt ? 'is-trashed' : ''}>
+                    <div key={sh.id} className={`share-card${a.deletedAt || ended(sh) ? ' is-trashed' : ''}`}>
                       <AssetCard asset={a} selected={false} selecting={false} onToggle={() => s.openSheet(a.id)} onOpen={() => s.openSheet(a.id)} menu={menu} where={a.deletedAt ? 'In Trash — not shown' : s.path(a.folderId).map(nameOf).join(' › ')} />
+                      <UntilBadge sh={sh} />
                     </div>
                   ) : null;
                 })}
@@ -248,9 +416,16 @@ function ClientBody({ c, onEdit, onAdd, onDelete, modals }: { c: Client; onEdit:
                       <ILink />
                     </span>
                     <span className="list-text">
-                      <strong>{sh.title}</strong>
+                      <strong>
+                        {sh.title} <UntilBadge sh={sh} />
+                      </strong>
                       <small>{sh.url}</small>
                     </span>
+                    {s.canEdit && (
+                      <button className="icon-btn" aria-label="Set end date" title={sh.expiresAt ? 'Change end date' : 'Set end date'} onClick={() => setUntil({ sh, label: sh.title || 'link' })}>
+                        <IClock />
+                      </button>
+                    )}
                     <a className="icon-btn" href={sh.url ?? '#'} target="_blank" rel="noreferrer noopener" aria-label="Open link" title="Open">
                       <IExternal />
                     </a>
@@ -267,6 +442,7 @@ function ClientBody({ c, onEdit, onAdd, onDelete, modals }: { c: Client; onEdit:
         </>
       )}
       {modals}
+      {until && <UntilDialog c={c} sh={until.sh} label={until.label} onClose={() => setUntil(null)} />}
     </div>
   );
 }
@@ -395,10 +571,12 @@ function LoginDialog({ c, onClose, onMade }: { c: Client; onClose: () => void; o
 }
 
 function PasswordDialog({ email, password, fresh, onClose }: { email: string; password: string; fresh: boolean; onClose: () => void }) {
+  const s = useStore();
   const [copied, setCopied] = useState(false);
   const copy = () =>
     navigator.clipboard?.writeText(`Email: ${email}\nPassword: ${password}`).then(() => {
       setCopied(true);
+      s.toast('Copied', { tone: 'ok' });
       setTimeout(() => setCopied(false), 1600);
     });
   return (
@@ -419,27 +597,39 @@ function PasswordDialog({ email, password, fresh, onClose }: { email: string; pa
       <p className="muted">Send these to them privately. The password is shown only now — you can make a new one any time.</p>
       <div className="secret-box">
         <span>Email</span>
-        <code>{email}</code>
+        <div className="secret-value">
+          <code>{email}</code>
+          <CopyButton value={email} label="Copy email" toastText="Email copied" />
+        </div>
         <span>Password</span>
-        <code className="secret">{password}</code>
+        <div className="secret-value">
+          <code className="secret">{password}</code>
+          <CopyButton value={password} label="Copy password" toastText="Password copied" />
+        </div>
       </div>
       {!fresh && <p className="muted small">They were signed out everywhere and need this new password.</p>}
     </Dialog>
   );
 }
 
-function SharedFolder({ f, onRemove }: { f: Folder | undefined; onRemove?: () => void }) {
+function SharedFolder({ f, share, note, onUntil, onRemove }: { f: Folder | undefined; share?: Share; note?: string; onUntil?: () => void; onRemove?: () => void }) {
   const s = useStore();
   if (!f) return null;
   const count = (id: string): number => s.assetsIn(id).length + s.children(id).reduce((n, k) => n + count(k.id), 0);
   const trashed = !!f.deletedAt || s.path(f.id).some((x) => x.deletedAt);
   return (
-    <div className={`folder${trashed ? ' is-trashed' : ''}`} tabIndex={0} onClick={() => !trashed && s.go({ page: 'folder', id: f.id })}>
+    <div className={`folder${trashed || (share && ended(share)) ? ' is-trashed' : ''}`} tabIndex={0} onClick={() => !trashed && s.go({ page: 'folder', id: f.id })}>
       <FolderGlyph f={f} />
       <div className="folder-text">
         <strong>{nameOf(f)}</strong>
-        <small>{trashed ? 'In Trash — not shown' : `${count(f.id)} files · ${s.path(f.parentId).map(nameOf).join(' › ') || 'Library'}`}</small>
+        <small>{trashed ? 'In Trash — not shown' : `${count(f.id)} files · ${note ?? (s.path(f.parentId).map(nameOf).join(' › ') || 'Library')}`}</small>
+        {share && <UntilBadge sh={share} />}
       </div>
+      {onUntil && (
+        <button className="icon-btn" aria-label="Set end date" title={share?.expiresAt ? 'Change end date' : 'Set end date'} onClick={(e) => (e.stopPropagation(), onUntil())}>
+          <IClock />
+        </button>
+      )}
       {onRemove && (
         <button className="icon-btn" aria-label="Stop sharing" title="Stop sharing" onClick={(e) => (e.stopPropagation(), onRemove())}>
           <IX />
@@ -449,42 +639,172 @@ function SharedFolder({ f, onRemove }: { f: Folder | undefined; onRemove?: () =>
   );
 }
 
+/* ---------------- a new folder for this client ---------------- */
+
+function ClientFolderDialog({ c, onClose }: { c: Client; onClose: () => void }) {
+  const s = useStore();
+  const [name, setName] = useState('');
+  const [share, setShare] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const home = c.homeFolderId ? s.byId.get(c.homeFolderId) : undefined;
+  const where = [...(home ? s.path(home.id).map(nameOf) : ['Clients', c.name])].join(' › ');
+  const submit = async () => {
+    const v = name.trim();
+    if (!v || busy) return;
+    setBusy(true);
+    const r = await s.run<{ id: string }>('clients.newFolder', { clientId: c.id, name: v, share }, share ? `Created “${v}” and shared it with ${c.name}` : `Created “${v}”`);
+    setBusy(false);
+    if (r?.id) {
+      onClose();
+      s.go({ page: 'folder', id: r.id });
+    }
+  };
+  return (
+    <Dialog
+      title={`New folder for ${c.name}`}
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button kind="primary" disabled={!name.trim() || busy} onClick={submit}>
+            Create
+          </Button>
+        </>
+      }
+    >
+      <form className="client-folder-form" onSubmit={(e) => (e.preventDefault(), void submit())}>
+        <label className="field">
+          <span>Folder name</span>
+          <input autoFocus value={name} placeholder="e.g. CNY 2027" onChange={(e) => setName(e.target.value)} />
+        </label>
+        <p className="client-folder-where">
+          <IFolder /> {where} › <b>{name.trim() || 'New folder'}</b>
+        </p>
+        <label className="backup-switch">
+          <span>
+            <strong>Share with {c.name} now</strong>
+            <small className="muted">They'll see everything you put in it on the client website. Turn off to keep it to the team until it's ready.</small>
+          </span>
+          <input type="checkbox" role="switch" className="switch" checked={share} onChange={(e) => setShare(e.target.checked)} />
+        </label>
+      </form>
+    </Dialog>
+  );
+}
+
 /* ---------------- create / edit ---------------- */
 
 function ClientDialog({ client, onClose }: { client: Client | null; onClose: () => void }) {
   const s = useStore();
+  const fileRef = useRef<HTMLInputElement>(null);
   const [name, setName] = useState(client?.name ?? '');
   const [email, setEmail] = useState(client?.email ?? '');
   const [notes, setNotes] = useState(client?.notes ?? '');
   const [color, setColor] = useState(client?.color ?? COLORS[s.clients.length % COLORS.length]);
-  const save = async () => {
-    const body = { name: name.trim(), email: email.trim() || null, notes: notes.trim() || null, color };
-    if (client) {
-      if (await s.run('clients.update', { id: client.id, ...body }, 'Saved')) onClose();
-    } else {
-      const r = await s.run<{ id: string }>('clients.create', body, `Added ${body.name}`);
-      if (r?.id) {
-        onClose();
-        s.go({ page: 'client', id: r.id });
-      }
+  const [avatarKey, setAvatarKey] = useState<string | null>(client?.avatarKey ?? null);
+  const [pendingData, setPendingData] = useState<string | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [clearPhoto, setClearPhoto] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [photoErr, setPhotoErr] = useState('');
+
+  const showPhoto = !clearPhoto && (previewUrl || avatarKey);
+
+  const pickPhoto = async (file: File | undefined) => {
+    if (!file) return;
+    setPhotoErr('');
+    try {
+      const data = await encodeAvatar(file);
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      setPendingData(data);
+      setPreviewUrl(URL.createObjectURL(file));
+      setClearPhoto(false);
+    } catch (e) {
+      setPhotoErr(e instanceof Error ? e.message : 'Could not use that photo');
     }
   };
+
+  const removePhoto = () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setPendingData(null);
+    setPreviewUrl(null);
+    setClearPhoto(!!avatarKey);
+    if (!avatarKey) setAvatarKey(null);
+  };
+
+  const save = async () => {
+    if (!name.trim() || busy) return;
+    setBusy(true);
+    const body = { name: name.trim(), email: email.trim() || null, notes: notes.trim() || null, color };
+    try {
+      let id = client?.id;
+      if (client) {
+        if (!(await s.run('clients.update', { id: client.id, ...body }))) return;
+      } else {
+        const r = await s.run<{ id: string }>('clients.create', body);
+        if (!r?.id) return;
+        id = r.id;
+      }
+      if (id && pendingData) {
+        if (!(await s.run('clients.setAvatar', { id, data: pendingData }))) return;
+      } else if (id && clearPhoto) {
+        if (!(await s.run('clients.clearAvatar', { id }))) return;
+      }
+      s.toast(client ? 'Saved' : `Added ${body.name}`, { tone: 'ok' });
+      onClose();
+      if (!client && id) s.go({ page: 'client', id });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <Dialog
       title={client ? 'Edit client' : 'New client'}
       onClose={onClose}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button kind="primary" disabled={!name.trim()} onClick={save}>
+          <Button onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button kind="primary" disabled={!name.trim() || busy} onClick={save}>
             {client ? 'Save' : 'Add client'}
           </Button>
         </>
       }
     >
-      <form onSubmit={(e) => (e.preventDefault(), name.trim() && save())}>
+      <form onSubmit={(e) => (e.preventDefault(), save())}>
         <div className="client-preview">
-          <ClientAvatar c={{ name: name || '?', color }} size={52} />
+          <div className="client-photo">
+            <button
+              type="button"
+              className="client-photo-btn"
+              aria-label={showPhoto ? 'Change photo' : 'Add photo'}
+              onClick={() => fileRef.current?.click()}
+            >
+              <ClientAvatar
+                c={{ name: name || '?', color, avatarKey: clearPhoto ? null : avatarKey }}
+                size={52}
+                previewUrl={clearPhoto ? null : previewUrl}
+              />
+              <span className="client-photo-hint">{showPhoto ? 'Change' : 'Add photo'}</span>
+            </button>
+            {showPhoto && (
+              <button type="button" className="btn plain sm" onClick={removePhoto}>
+                Remove
+              </button>
+            )}
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/*"
+              hidden
+              onChange={(e) => {
+                void pickPhoto(e.target.files?.[0]);
+                e.target.value = '';
+              }}
+            />
+          </div>
           <div className="swatches" role="radiogroup" aria-label="Colour">
             {COLORS.map((c) => (
               <button key={c} type="button" role="radio" aria-checked={c === color} aria-label={c} style={{ background: c }} onClick={() => setColor(c)}>
@@ -493,6 +813,7 @@ function ClientDialog({ client, onClose }: { client: Client | null; onClose: () 
             ))}
           </div>
         </div>
+        {photoErr && <p className="field-err">{photoErr}</p>}
         <label className="field">
           <span>Client or company name</span>
           <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Acme Sdn Bhd" />
@@ -603,8 +924,9 @@ function SharePicker({ client, onClose }: { client: Client; onClose: () => void 
   };
 
   const count = folders.size + items.size;
+  const [expires, setExpires] = useState<number | null>(null);
   const share = async () => {
-    const body = tab === 'link' ? { clientId: client.id, links: [{ url, title }] } : { clientId: client.id, folderIds: [...folders], itemIds: [...items] };
+    const body = tab === 'link' ? { clientId: client.id, links: [{ url, title }], expiresAt: expires } : { clientId: client.id, folderIds: [...folders], itemIds: [...items], expiresAt: expires };
     const r = await s.run<{ added: number }>('shares.add', body, tab === 'link' ? 'Link shared' : `Shared ${count} ${count === 1 ? 'item' : 'items'} with ${client.name}`);
     if (r) onClose();
   };
@@ -661,27 +983,35 @@ function SharePicker({ client, onClose }: { client: Client; onClose: () => void 
           <button type="submit" hidden />
         </form>
       )}
+      <UntilPicker value={expires} onChange={setExpires} />
     </Dialog>
   );
 }
 
 /** From the library: share one folder or file with one or more clients. */
-export function ShareWithClients({ kind, id, label, onClose }: { kind: 'folder' | 'item'; id: string; label: string; onClose: () => void }) {
+/** Share one folder or file — or many selected files at once — with one or more clients, optionally until a date. */
+export function ShareWithClients({ kind, id, ids, label, onClose }: { kind: 'folder' | 'item'; id?: string; ids?: string[]; label: string; onClose: () => void }) {
   const s = useStore();
-  const direct = new Set(s.clients.filter((c) => c.shares.some((x) => x.kind === kind && x.targetId === id)).map((c) => c.id));
-  const viaParent = new Set(s.sharedWith(kind, id).map((c) => c.id));
+  const targets = ids ?? (id ? [id] : []);
+  const many = targets.length > 1;
+  // a client is ticked (and locked) when everything is already shared with them, directly or through a folder
+  const hasAll = (c: Client, through: boolean) =>
+    targets.every((t) => c.shares.some((x) => x.kind === kind && x.targetId === t && !ended(x)) || (through && s.sharedWith(kind, t).some((y) => y.id === c.id)));
+  const direct = new Set(s.clients.filter((c) => hasAll(c, false)).map((c) => c.id));
+  const viaParent = new Set(s.clients.filter((c) => hasAll(c, true)).map((c) => c.id));
   const [sel, setSel] = useState<Set<string>>(new Set());
+  const [expires, setExpires] = useState<number | null>(null);
   const share = async () => {
     let n = 0;
     for (const cid of sel) {
-      if (await s.run('shares.add', { clientId: cid, [kind === 'folder' ? 'folderIds' : 'itemIds']: [id] })) n++;
+      if (await s.run('shares.add', { clientId: cid, [kind === 'folder' ? 'folderIds' : 'itemIds']: targets, expiresAt: expires })) n++;
     }
-    if (n) s.toast(`Shared “${label}” with ${n} ${n === 1 ? 'client' : 'clients'}`, { tone: 'ok' });
+    if (n) s.toast(`Shared ${many ? `${targets.length} files` : `“${label}”`} with ${n} ${n === 1 ? 'client' : 'clients'}`, { tone: 'ok' });
     onClose();
   };
   return (
     <Dialog
-      title={`Share “${label}”`}
+      title={many ? `Share ${targets.length} files` : `Share “${label}”`}
       onClose={onClose}
       footer={
         <>
@@ -716,6 +1046,7 @@ export function ShareWithClients({ kind, id, label, onClose }: { kind: 'folder' 
           })}
         </div>
       )}
+      {s.clients.length > 0 && <UntilPicker value={expires} onChange={setExpires} />}
     </Dialog>
   );
 }

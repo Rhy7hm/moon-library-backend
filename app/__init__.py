@@ -42,13 +42,14 @@ def create_app(overrides: dict | None = None) -> Flask:
 
     Migrate(app, db, directory=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "migrations"), compare_type=True)
 
-    from .blueprints import admin_api, admin_ui, auth_api, client_api, files_api
+    from .blueprints import admin_api, admin_ui, auth_api, client_api, client_ui, files_api
 
     app.register_blueprint(auth_api.bp)
     app.register_blueprint(admin_api.bp)
     app.register_blueprint(files_api.bp)
     app.register_blueprint(client_api.bp)
     app.register_blueprint(admin_ui.bp)
+    app.register_blueprint(client_ui.bp)
 
     from .cli import register_cli
 

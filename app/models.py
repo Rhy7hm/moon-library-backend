@@ -142,6 +142,7 @@ users = Table(
     Column("created_by", VARCHAR(100), nullable=True),
     Column("updated_at", BigInteger, nullable=False),
     Column("ui_lang", VARCHAR(8, collation=BIN), nullable=True),
+    Column("avatar_key", VARCHAR(512, collation=BIN), nullable=True),  # R2 key for profile photo (u/…)
     **TABLE_ARGS,
 )
 
@@ -257,10 +258,12 @@ clients = Table(
     Column("email", VARCHAR(255), nullable=True),
     Column("notes", Text, nullable=True),
     Column("color", VARCHAR(16), nullable=True),
+    Column("avatar_key", VARCHAR(512, collation=BIN), nullable=True),  # R2 key for profile photo (c/…)
     Column("created_at", BigInteger, nullable=False),
     Column("created_by", VARCHAR(100), nullable=True),
     Column("updated_at", BigInteger, nullable=False),
     Column("inbox_folder_id", VARCHAR(64, collation=BIN), nullable=True),  # where the client's own uploads go
+    Column("home_folder_id", VARCHAR(64, collation=BIN), nullable=True),  # Clients › <client> in the library
     **TABLE_ARGS,
 )
 
@@ -275,6 +278,7 @@ client_shares = Table(
     Column("title", VARCHAR(300), nullable=True),
     Column("created_at", BigInteger, nullable=False),
     Column("created_by", VARCHAR(100), nullable=True),
+    Column("expires_at", BigInteger, nullable=True),  # null = no end date; after it the client no longer sees it
     Index("shares_client", "client_id", "created_at"),
     Index("shares_target", "kind", "target_id"),
     **TABLE_ARGS,
@@ -315,7 +319,31 @@ client_sessions = Table(
     **TABLE_ARGS,
 )
 
+# labels on files ("CNY 2027", "approved", "IG story"); a file can have several
+tags = Table(
+    "tags",
+    metadata,
+    Column("id", VARCHAR(64, collation=BIN), primary_key=True),
+    Column("name", VARCHAR(60), nullable=False, unique=True),
+    Column("color", VARCHAR(16, collation=BIN), nullable=True),
+    Column("created_at", BigInteger, nullable=False),
+    Column("created_by", VARCHAR(100), nullable=True),
+    **TABLE_ARGS,
+)
+
+item_tags = Table(
+    "item_tags",
+    metadata,
+    Column("item_id", VARCHAR(64, collation=BIN), ForeignKey("items.id", name="fk_item_tags_item", ondelete="CASCADE"), nullable=False),
+    Column("tag_id", VARCHAR(64, collation=BIN), ForeignKey("tags.id", name="fk_item_tags_tag", ondelete="CASCADE"), nullable=False),
+    PrimaryKeyConstraint("item_id", "tag_id"),
+    Index("item_tags_tag", "tag_id"),
+    **TABLE_ARGS,
+)
+
 ALL_TABLES = [
+    "item_tags",
+    "tags",
     "folders",
     "items",
     "files",

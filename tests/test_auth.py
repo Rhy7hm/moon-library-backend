@@ -164,12 +164,25 @@ def test_role_enforcement(app, client):
     assert vi.put("/api/admin/upload?key=o/abcdefgh/x.png", data=b"x").status_code == 403
     # editor: content yes, owner things no
     assert ed.post("/api/admin/folder.create", json={"parentId": None, "name": {"en": "C"}}).status_code == 200
-    for o in ("purge", "users.list", "users.create"):
+    for o in ("users.list", "users.create"):
         r = ed.post(f"/api/admin/{o}", json={})
         assert r.status_code == 403 and r.get_json()["error"] == "Only an Owner can do this."
+    # emptying the whole Trash is Owner-only; deleting one trashed item is fine for Editor
+    assert ed.post("/api/admin/purge", json={"all": True}).status_code == 403
     assert ed.get("/api/admin/backup").status_code == 403
     assert ed.post("/api/admin/settings.set", json={"key": "security", "value": {"lockout": True}}).get_json()["error"] == "Only an Owner can change security settings."
+    # nothing outside the Trash can be deleted for good, by anyone
+    live = op(client, "folder.create", {"parentId": None, "name": {"en": "Live"}})["id"]
+    live_item = op(client, "item.create", {"folderId": live, "title": {"en": "Card"}})["id"]
+    assert ed.post("/api/admin/purge", json={"folderIds": [live]}).status_code == 400
+    assert client.post("/api/admin/purge", json={"itemIds": [live_item]}).status_code == 400
+    assert ed.post("/api/admin/purge", json={"itemIds": ["nope"]}).status_code == 400
+    op(client, "trash", {"folderIds": [live]})
+    assert op(ed, "purge", {"itemIds": [live_item]})["ok"] is True  # inside a trashed folder: fine
     op(client, "trash", {"folderIds": [fid]})
+    assert op(ed, "purge", {"folderIds": [fid]})["ok"] is True
+    fid2 = op(client, "folder.create", {"parentId": None, "name": {"en": "D"}})["id"]
+    op(client, "trash", {"folderIds": [fid2]})
     assert op(client, "purge", {"all": True})["ok"] is True
 
 

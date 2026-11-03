@@ -1,11 +1,15 @@
-/* Signed in → the library; otherwise sign-in (or first-time setup). */
+/*
+ * Signed in → the library. Signed out → the shared sign-in page at the site's root (/), which sends
+ * staff back here. Only first-time setup (no accounts yet) and the dev server keep the admin's own form.
+ */
 import { useCallback, useEffect, useState } from 'react';
 import { errText, getMe, login, setup, type Me } from './api';
-import { IMoon } from './icons';
 import { Shell } from './shell';
 import { StoreProvider } from './store';
 import { Button } from './ui';
 import './app.css';
+
+const brandMark = `${import.meta.env.BASE_URL}brand-mark.png`;
 
 type State = { phase: 'loading' } | { phase: 'in'; me: Me } | { phase: 'out'; needsSetup: boolean; needsKey: boolean };
 
@@ -26,9 +30,13 @@ export default function App() {
   if (st.phase === 'loading')
     return (
       <div className="boot">
-        <IMoon className="boot-mark" />
+        <img className="boot-mark" src={brandMark} alt="" width={34} height={34} draggable={false} />
       </div>
     );
+  if (st.phase === 'out' && !st.needsSetup && import.meta.env.PROD) {
+    location.replace('/');
+    return <div className="boot" />;
+  }
   if (st.phase === 'out') return <SignIn setupMode={st.needsSetup} needsKey={st.needsKey} onIn={(me) => setSt({ phase: 'in', me })} />;
   return (
     <StoreProvider me={st.me} onSignOut={check}>
@@ -60,7 +68,7 @@ function SignIn({ setupMode, needsKey, onIn }: { setupMode: boolean; needsKey: b
     <div className="auth">
       <form className="auth-card" onSubmit={submit}>
         <span className="auth-mark">
-          <IMoon />
+          <img src={brandMark} alt="" width={52} height={52} draggable={false} />
         </span>
         <h1>{setupMode ? 'Welcome to Moon Library' : 'Sign in'}</h1>
         <p className="muted">{setupMode ? 'Create the first Owner account. You can add your team afterwards.' : 'Your team’s images, videos and design files.'}</p>

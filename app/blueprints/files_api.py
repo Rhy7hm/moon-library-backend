@@ -49,7 +49,7 @@ def _parse_range(h: str | None):
 @bp.route("/f/<path:key>", methods=["GET", "HEAD"])
 def serve_file(key: str):
     """A stored file by its storage key, for signed-in staff. Anyone else gets 404 (no hint the file exists)."""
-    if not re.match(r"^(o|v|t|p|i)/", key) or not get_user():
+    if not re.match(r"^(o|v|t|p|i|c|u)/", key) or not get_user():
         return Response("Not found", status=404, mimetype="text/plain", headers={"Cache-Control": "no-store"})
     dl = (request.args.get("dl") or key.split("/")[-1] or "download") if "dl" in request.args else None
     # keys never change (a replaced file gets new ones), so the browser may keep its own copy
@@ -117,10 +117,20 @@ def zip_download():
     if not get_user():
         return Response("Not found", status=404, mimetype="text/plain")
     ids = list(dict.fromkeys(x.strip() for x in (request.args.get("v") or "").split(",") if x.strip()))[:MAX_FILES]
+    # ?folder=<id>: everything in a folder and its sub-folders, laid out in the same sub-folders
+    prefix: dict[str, str] = {}
+    folder_name = None
+    if request.args.get("folder"):
+        got = _folder_files(request.args["folder"])
+        if got is None:
+            return Response("Not found", status=404, mimetype="text/plain")
+        ids, prefix, folder_name = got
+        if len(ids) > MAX_FILES:
+            return Response(f"That folder has more than {MAX_FILES} files. Download its sub-folders one by one.", status=413, mimetype="text/plain")
     if not ids:
         return Response("Nothing to zip", status=400, mimetype="text/plain")
     original = request.args.get("o") == "1"
-    zip_name = re.sub(r'[\\/:*?"<>|]+', " ", request.args.get("name") or "Moon Library files").strip()[:120] or "Moon Library files"
+    zip_name = re.sub(r'[\\/:*?"<>|]+', " ", request.args.get("name") or folder_name or "Moon Library files").strip()[:120] or "Moon Library files"
     # the language the library is showing: files are named after their card's title in it ("Rebate_BM.png")
     lang_shown = request.args.get("l") if request.args.get("l") in LANG_CODES else "en"
 
@@ -165,7 +175,7 @@ def zip_download():
         title = _text(r["title"])
         t = pick_text(title, lang_shown) or pick_text(title, "en")
         name = dl_name(r["name"], r["opt_mime"], r["key_opt"], lang, [lang, *extra] if extra else None, original=not use_opt, title=t)
-        plan.append({"key": r["key_opt"] if use_opt else r["key_orig"], "name": unique(name)})
+        plan.append({"key": r["key_opt"] if use_opt else r["key_orig"], "name": unique(prefix.get(r["folder_id"], "") + name)})
 
     st = storage()
     files = []
@@ -208,6 +218,41 @@ def _text(raw) -> dict:
         return v if isinstance(v, dict) else {}
     except (ValueError, TypeError):
         return {"en": raw}
+
+
+def _folder_files(root: str):
+    """
+    Finished files in a folder and every sub-folder that isn't in the Trash → (file ids, {folder id: "Sub/Sub2/"}, folder name),
+    or None when the folder doesn't exist or is in the Trash.
+    """
+    trashed = _trashed_folders()
+    folders = {r["id"]: r for r in q.all("SELECT id, parent_id, name FROM folders")}
+    if root not in folders or root in trashed:
+        return None
+    kids: dict[str, list[str]] = {}
+    for f in folders.values():
+        if f["parent_id"]:
+            kids.setdefault(f["parent_id"], []).append(f["id"])
+    safe = lambda n: re.sub(r'[\\/:*?"<>|]+', " ", n).strip() or "Folder"
+    prefix: dict[str, str] = {root: ""}
+    todo = [root]
+    while todo:
+        fid = todo.pop()
+        for k in kids.get(fid, []):
+            if k in trashed or k in prefix:
+                continue
+            prefix[k] = f"{prefix[fid]}{safe(pick_text(_text(folders[k]['name']), 'en') or 'Folder')}/"
+            todo.append(k)
+    ids = [
+        r["id"]
+        for r in q.all(
+            f"""SELECT f.id FROM files f JOIN items it ON it.id = f.item_id
+                 WHERE it.folder_id IN ({in_list(len(prefix))}) AND it.deleted_at IS NULL AND f.status = 'ready'
+                 ORDER BY it.folder_id, it.sort, f.id""",
+            *prefix,
+        )
+    ]
+    return ids, prefix, safe(pick_text(_text(folders[root]["name"]), "en") or "Folder")
 
 
 def _trashed_folders() -> set[str]:

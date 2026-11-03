@@ -79,7 +79,8 @@ def base_env(database, s3_server, sa_key):
     }
     old = {k: os.environ.get(k) for k in env}
     os.environ.update(env)
-    for k in ("GDRIVE_SA_JSON", "GDRIVE_FOLDER_ID", "GDRIVE_API", "GDRIVE_TOKEN_URL", "ALLOW_SETUP_WITHOUT_KEY", "GDRIVE_SA_FILE"):
+    for k in ("GDRIVE_SA_JSON", "GDRIVE_FOLDER_ID", "GDRIVE_API", "GDRIVE_TOKEN_URL", "ALLOW_SETUP_WITHOUT_KEY", "GDRIVE_SA_FILE",
+              "GDRIVE_CLIENT_ID", "GDRIVE_CLIENT_SECRET", "GDRIVE_REDIRECT_URL", "GDRIVE_AUTH_URL", "GDRIVE_REVOKE_URL"):
         os.environ.pop(k, None)
     yield env
     for k, v in old.items():
@@ -118,6 +119,8 @@ def clean(app):
         app.config["COOKIE_SECURE_ALWAYS"] = False
         app.config["GDRIVE_SA_JSON"] = None
         app.config["GDRIVE_FOLDER_ID"] = None
+        app.config["GDRIVE_CLIENT_ID"] = None
+        app.config["GDRIVE_CLIENT_SECRET"] = None
         app.extensions.pop("moonlib_storage", None)
     yield
 

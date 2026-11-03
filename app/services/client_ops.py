@@ -8,28 +8,42 @@ A share is one of:
 
 Clients sign in to the client website (moon-library-client, through /api/client) with logins made here.
 Files a client sends land in their inbox folder ("From <client>").
+
+Every client has a home folder in the library, Clients › <client name>, made when the client is added.
+Folders made from the client's page go inside it (and are shared with them), and so does their inbox,
+so the library — and the Google Drive backup, which copies the library's folders — is sorted by client.
+Folders made anywhere else in the library stay where they were made.
 Removing a share never deletes the file. Permanently deleting a file or folder removes its shares
 (see admin_ops.purge).
 
-  clients.list     every client with its shares                 (Viewer)
-  clients.create   { name, email?, notes?, color? }  → { id }   (Editor)
-  clients.update   { id, name?, email?, notes?, color? }        (Editor)
-  clients.delete   { id }  (its shares go with it)              (Owner)
-  shares.add       { clientId, folderIds?, itemIds?, links?: [{ url, title }] } → { added, skipped }
-  shares.remove    { clientId, ids }
-  logins.create    { clientId, email, name } → { id, password }   the password is shown once  (Editor)
-  logins.reset     { id } → { password }   new password, signs them out everywhere        (Editor)
-  logins.update    { id, disabled?, name? }   turning off signs them out                   (Editor)
-  logins.delete    { id }                                                                  (Editor)
+  clients.list       every client with its shares                 (Viewer)
+  clients.create     { name, email?, notes?, color? }  → { id }   (Editor)
+  clients.update     { id, name?, email?, notes?, color? }        (Editor)
+  clients.setAvatar  { id, data }  JPEG/PNG/WEBP as base64 → { avatarKey }  (Editor)
+  clients.clearAvatar { id }                                       (Editor)
+  clients.delete     { id }  (its shares go with it; the home folder stays)  (Owner)
+  clients.newFolder  { clientId, name, share? = true } → { id }   a folder in the client's home folder (Editor)
+  shares.add         { clientId, folderIds?, itemIds?, links?: [{ url, title }], expiresAt? } → { added, skipped }
+                     expiresAt (ms, or null for no end date) also applies to any of these already shared
+  shares.expire      { clientId, ids, expiresAt }  — set or clear the end date of shares
+  shares.remove      { clientId, ids }
+  logins.create      { clientId, email, name } → { id, password }   the password is shown once  (Editor)
+  logins.reset       { id } → { password }   new password, signs them out everywhere        (Editor)
+  logins.update      { id, disabled?, name? }   turning off signs them out                   (Editor)
+  logins.delete      { id }                                                                  (Editor)
 """
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
-from ..auth import SessionUser, hash_password, random_password, write_log
-from ..db import in_list, q
-from ..util import HttpError, new_id, now
+from ..auth import SessionUser, at_least, hash_password, random_password, write_log
+from ..avatar import decode_image_b64
+from ..db import UPSERT_SETTING, in_list, q
+from ..storage import IMMUTABLE, storage
+from ..util import HttpError, is_num, new_id, now
+from . import admin_ops
 
 KINDS = ("folder", "item", "link")
 _COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -61,30 +75,123 @@ def _ids(v) -> list[str]:
 
 
 def _client(cid) -> dict:
-    row = q.first("SELECT id, name FROM clients WHERE id = ?", str(cid or ""))
+    row = q.first("SELECT id, name, avatar_key FROM clients WHERE id = ?", str(cid or ""))
     if not row:
         raise HttpError(404, "Client not found")
     return row
 
 
 def _share_out(r: dict) -> dict:
-    return {"id": r["id"], "kind": r["kind"], "targetId": r["target_id"], "url": r["url"], "title": r["title"], "createdAt": r["created_at"], "createdBy": r["created_by"]}
+    return {
+        "id": r["id"], "kind": r["kind"], "targetId": r["target_id"], "url": r["url"], "title": r["title"],
+        "createdAt": r["created_at"], "createdBy": r["created_by"], "expiresAt": r.get("expires_at"),
+    }
+
+
+def _expiry(v):
+    """An end date for a share: null (none) or a time in the future (ms)."""
+    if v is None:
+        return None
+    if not is_num(v) or int(v) <= now():
+        raise HttpError(400, "The end date has to be in the future")
+    return int(v)
+
+
+# ---------------------------------------------------------------- home folders: Clients › <client>
+
+ROOT_KEY = "clients.rootFolder"  # settings: the id of the top-level "Clients" folder
+
+
+def _live(fid: str | None) -> bool:
+    """The folder exists and neither it nor a folder above it is in the Trash."""
+    seen = 0
+    while fid and seen < 50:
+        r = q.first("SELECT parent_id, deleted_at FROM folders WHERE id = ?", fid)
+        if not r or r["deleted_at"]:
+            return False
+        fid, seen = r["parent_id"], seen + 1
+    return True
+
+
+def _clients_root(by: str) -> str:
+    r = q.first("SELECT value FROM settings WHERE `key` = ?", ROOT_KEY)
+    if r and _live(r["value"]):
+        return r["value"]
+    fid = admin_ops.folder_create(admin_ops.Ctx(by), {"parentId": None, "name": {"en": "Clients"}})["id"]
+    q.run(UPSERT_SETTING, ROOT_KEY, fid, now(), by)
+    return fid
+
+
+def ensure_home(client_id: str, by: str) -> str:
+    """The client's home folder, made (under Clients) if it's missing or was deleted. Their inbox moves into it."""
+    c = q.first("SELECT id, name, home_folder_id, inbox_folder_id FROM clients WHERE id = ?", client_id)
+    if not c:
+        raise HttpError(404, "Client not found")
+    home = c["home_folder_id"]
+    if not (home and _live(home)):
+        home = admin_ops.folder_create(admin_ops.Ctx(by), {"parentId": _clients_root(by), "name": {"en": c["name"]}})["id"]
+        q.run("UPDATE clients SET home_folder_id = ? WHERE id = ?", home, c["id"])
+    inbox = c["inbox_folder_id"]
+    if inbox and _live(inbox) and (q.first("SELECT parent_id FROM folders WHERE id = ?", inbox) or {}).get("parent_id") is None:
+        admin_ops.move(admin_ops.Ctx(by), {"folderIds": [inbox], "targetId": home})
+    return home
+
+
+def _rename_home(c: dict, name: str) -> None:
+    home = q.first("SELECT f.id, f.name FROM clients c JOIN folders f ON f.id = c.home_folder_id WHERE c.id = ?", c["id"])
+    if home:
+        admin_ops.folder_update(admin_ops.Ctx("system"), {"id": home["id"], "name": {**admin_ops._parse_name(home["name"]), "en": name}})
+
+
+def clients_new_folder(user: SessionUser, b: dict):
+    c = _client(b.get("clientId"))
+    name = _text(b.get("name"), "Name", 200, required=True)
+    home = ensure_home(c["id"], user.username)
+    fid = admin_ops.folder_create(admin_ops.Ctx(user.username), {"parentId": home, "name": {"en": name}})["id"]
+    shared = b.get("share", True) is not False
+    if shared:
+        q.run(
+            "INSERT INTO client_shares (id, client_id, kind, target_id, url, title, created_at, created_by) VALUES (?,?,?,?,?,?,?,?)",
+            new_id(), c["id"], "folder", fid, None, None, now(), user.username,
+        )
+    write_log(user, {
+        "kind": "content", "action": "clients.newFolder", "folderId": fid,
+        "summary": f"Created “{name}” in {c['name']}’s folder" + (f" and shared it with {c['name']}" if shared else ""),
+    })
+    return {"id": fid}
 
 
 def clients_list(user: SessionUser, b: dict):
-    rows = q.all("SELECT id, name, email, notes, color, created_at, created_by, updated_at, inbox_folder_id FROM clients ORDER BY name")
+    if at_least(user.role, "editor"):  # clients added before home folders existed get one
+        for r in q.all("SELECT id FROM clients WHERE home_folder_id IS NULL"):
+            ensure_home(r["id"], user.username)
+    rows = q.all("SELECT id, name, email, notes, color, avatar_key, created_at, created_by, updated_at, inbox_folder_id, home_folder_id FROM clients ORDER BY name")
     logins: dict[str, list] = {}
     for u in q.all("SELECT id, client_id, email, name, disabled, last_login_at, created_at FROM client_users ORDER BY created_at"):
         logins.setdefault(u["client_id"], []).append(
             {"id": u["id"], "email": u["email"], "name": u["name"], "disabled": bool(u["disabled"]), "lastLoginAt": u["last_login_at"], "createdAt": u["created_at"]}
         )
-    shares = q.all("SELECT id, client_id, kind, target_id, url, title, created_at, created_by FROM client_shares ORDER BY created_at DESC")
+    shares = q.all("SELECT id, client_id, kind, target_id, url, title, created_at, created_by, expires_at FROM client_shares ORDER BY created_at DESC")
     by: dict[str, list] = {}
     for s in shares:
         by.setdefault(s["client_id"], []).append(_share_out(s))
     return {
         "clients": [
-            {"id": r["id"], "name": r["name"], "email": r["email"], "notes": r["notes"], "color": r["color"], "createdAt": r["created_at"], "createdBy": r["created_by"], "updatedAt": r["updated_at"], "shares": by.get(r["id"], []), "logins": logins.get(r["id"], []), "inboxFolderId": r["inbox_folder_id"]}
+            {
+                "id": r["id"],
+                "name": r["name"],
+                "email": r["email"],
+                "notes": r["notes"],
+                "color": r["color"],
+                "avatarKey": r["avatar_key"],
+                "createdAt": r["created_at"],
+                "createdBy": r["created_by"],
+                "updatedAt": r["updated_at"],
+                "shares": by.get(r["id"], []),
+                "logins": logins.get(r["id"], []),
+                "inboxFolderId": r["inbox_folder_id"],
+                "homeFolderId": r["home_folder_id"],
+            }
             for r in rows
         ]
     }
@@ -99,8 +206,9 @@ def clients_create(user: SessionUser, b: dict):
         "INSERT INTO clients (id, name, email, notes, color, created_at, created_by, updated_at) VALUES (?,?,?,?,?,?,?,?)",
         cid, name, _email(b.get("email")), _text(b.get("notes"), "Notes", 5000), _color(b.get("color")), t, user.username, t,
     )
-    write_log(user, {"kind": "content", "action": "clients.create", "summary": f"Added client “{name}”", "targetType": "client", "targetIds": [cid]})
-    return {"id": cid}
+    home = ensure_home(cid, user.username)
+    write_log(user, {"kind": "content", "action": "clients.create", "summary": f"Added client “{name}”", "targetType": "client", "targetIds": [cid], "folderId": home})
+    return {"id": cid, "homeFolderId": home}
 
 
 def clients_update(user: SessionUser, b: dict):
@@ -124,13 +232,41 @@ def clients_update(user: SessionUser, b: dict):
     if not sets:
         return {"ok": True}
     q.run(f"UPDATE clients SET {', '.join(sets)}, updated_at = ? WHERE id = ?", *vals, now(), c["id"])
+    if "name" in b and vals[0] != c["name"]:
+        _rename_home(c, vals[0])
     write_log(user, {"kind": "content", "action": "clients.update", "summary": f"Updated client “{vals[0] if 'name' in b else c['name']}”", "targetType": "client", "targetIds": [c["id"]]})
+    return {"ok": True}
+
+
+def clients_set_avatar(user: SessionUser, b: dict):
+    c = _client(b.get("id"))
+    raw, content_type, ext = decode_image_b64(b.get("data"))
+    key = f"c/{new_id(16)}.{ext}"
+    storage().put(key, raw, len(raw), content_type, None, IMMUTABLE)
+    old = c.get("avatar_key")
+    q.run("UPDATE clients SET avatar_key = ?, updated_at = ? WHERE id = ?", key, now(), c["id"])
+    if old and old != key:
+        storage().delete([old])
+    write_log(user, {"kind": "content", "action": "clients.setAvatar", "summary": f"Updated the photo for “{c['name']}”", "targetType": "client", "targetIds": [c["id"]]})
+    return {"avatarKey": key}
+
+
+def clients_clear_avatar(user: SessionUser, b: dict):
+    c = _client(b.get("id"))
+    old = c.get("avatar_key")
+    if not old:
+        return {"ok": True}
+    q.run("UPDATE clients SET avatar_key = NULL, updated_at = ? WHERE id = ?", now(), c["id"])
+    storage().delete([old])
+    write_log(user, {"kind": "content", "action": "clients.clearAvatar", "summary": f"Removed the photo for “{c['name']}”", "targetType": "client", "targetIds": [c["id"]]})
     return {"ok": True}
 
 
 def clients_delete(user: SessionUser, b: dict):
     c = _client(b.get("id"))
     q.batch([("DELETE FROM client_shares WHERE client_id = ?", [c["id"]]), ("DELETE FROM clients WHERE id = ?", [c["id"]])])
+    if c.get("avatar_key"):
+        storage().delete([c["avatar_key"]])
     write_log(user, {"kind": "content", "action": "clients.delete", "summary": f"Removed client “{c['name']}” (their files stay in the library)", "targetType": "client", "targetIds": [c["id"]]})
     return {"ok": True}
 
@@ -151,6 +287,8 @@ def shares_add(user: SessionUser, b: dict):
     links = b.get("links") if isinstance(b.get("links"), list) else []
     if not folder_ids and not item_ids and not links:
         raise HttpError(400, "Choose something to share")
+    set_expiry = "expiresAt" in b
+    expires = _expiry(b.get("expiresAt")) if set_expiry else None
 
     def existing(table: str, ids: list[str]) -> set[str]:
         if not ids:
@@ -161,7 +299,14 @@ def shares_add(user: SessionUser, b: dict):
     missing = (set(folder_ids) - ok_folders) | (set(item_ids) - ok_items)
     if missing:
         raise HttpError(404, "Some of those are no longer in the library")
-    already = {(r["kind"], r["target_id"] or r["url"]) for r in q.all("SELECT kind, target_id, url FROM client_shares WHERE client_id = ?", c["id"])}
+    current = q.all("SELECT id, kind, target_id, url FROM client_shares WHERE client_id = ?", c["id"])
+    already = {(r["kind"], r["target_id"] or r["url"]) for r in current}
+    # sharing again with a new end date moves the end date of what's already shared
+    if set_expiry:
+        wanted = {("folder", x) for x in folder_ids} | {("item", x) for x in item_ids}
+        again = [r["id"] for r in current if (r["kind"], r["target_id"]) in wanted]
+        if again:
+            q.run(f"UPDATE client_shares SET expires_at = ? WHERE id IN ({in_list(len(again))})", expires, *again)
     t = now()
     rows, names = [], []
     for kind, ids in (("folder", folder_ids), ("item", item_ids)):
@@ -179,13 +324,26 @@ def shares_add(user: SessionUser, b: dict):
             already.add(("link", url))
             names.append(title)
     if rows:
-        q.batch([("INSERT INTO client_shares (id, client_id, kind, target_id, url, title, created_at, created_by) VALUES (?,?,?,?,?,?,?,?)", [*r, t, user.username]) for r in rows])
+        q.batch([("INSERT INTO client_shares (id, client_id, kind, target_id, url, title, created_at, created_by, expires_at) VALUES (?,?,?,?,?,?,?,?,?)", [*r, t, user.username, expires]) for r in rows])
         n_f = sum(1 for r in rows if r[2] == "folder")
         n_i = sum(1 for r in rows if r[2] == "item")
         n_l = sum(1 for r in rows if r[2] == "link")
         parts = [p for p in (f"{n_f} folder{'s' if n_f != 1 else ''}" if n_f else "", f"{n_i} file{'s' if n_i != 1 else ''}" if n_i else "", f"{n_l} link{'s' if n_l != 1 else ''}" if n_l else "") if p]
-        write_log(user, {"kind": "content", "action": "shares.add", "summary": f"Shared {', '.join(parts)} with “{c['name']}”", "targetType": "client", "targetIds": [c["id"]]})
+        until = f" until {datetime.fromtimestamp((expires + 8 * 3600_000) / 1000, tz=timezone.utc):%-d %b %Y}" if expires else ""
+        write_log(user, {"kind": "content", "action": "shares.add", "summary": f"Shared {', '.join(parts)} with “{c['name']}”{until}", "targetType": "client", "targetIds": [c["id"]]})
     return {"added": len(rows), "skipped": len(folder_ids) + len(item_ids) + len(links) - len(rows)}
+
+
+def shares_expire(user: SessionUser, b: dict):
+    c = _client(b.get("clientId"))
+    ids = _ids(b.get("ids"))
+    if not ids:
+        raise HttpError(400, "Choose what to change")
+    expires = _expiry(b.get("expiresAt"))
+    n = q.run(f"UPDATE client_shares SET expires_at = ? WHERE client_id = ? AND id IN ({in_list(len(ids))})", expires, c["id"], *ids)
+    when = f"until {datetime.fromtimestamp((expires + 8 * 3600_000) / 1000, tz=timezone.utc):%-d %b %Y}" if expires else "with no end date"
+    write_log(user, {"kind": "content", "action": "shares.expire", "summary": f"“{c['name']}” can now see {n} shared item{'s' if n != 1 else ''} {when}", "targetType": "client", "targetIds": [c["id"]]})
+    return {"ok": True, "changed": n}
 
 
 def shares_remove(user: SessionUser, b: dict):
@@ -266,8 +424,12 @@ CLIENT_OPS = {
     "clients.list": clients_list,
     "clients.create": clients_create,
     "clients.update": clients_update,
+    "clients.setAvatar": clients_set_avatar,
+    "clients.clearAvatar": clients_clear_avatar,
     "clients.delete": clients_delete,
+    "clients.newFolder": clients_new_folder,
     "shares.add": shares_add,
+    "shares.expire": shares_expire,
     "shares.remove": shares_remove,
     "logins.create": logins_create,
     "logins.reset": logins_reset,
