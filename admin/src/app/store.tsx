@@ -72,6 +72,7 @@ type Store = {
   folders: Folder[];
   assets: Asset[];
   trashFolders: Folder[];
+  trashClients: Client[];
   trashAssets: Asset[];
   byId: Map<string, Folder>;
   /** every tag, by name; and a quick lookup by id */
@@ -124,6 +125,7 @@ export function StoreProvider({ me: meProp, onSignOut, children }: { me: Me; onS
   const [me, setMeState] = useState(meProp);
   const [tree, setTree] = useState<Tree | null>(null);
   const [clients, setClients] = useState<Client[]>([]);
+  const [trashClients, setTrashClients] = useState<Client[]>([]); // removed clients, in the Trash
   const [route, setRoute] = useState<Route>(() => parseRoute(location.hash));
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [sheet, setSheet] = useState<string | null>(null);
@@ -153,7 +155,8 @@ export function StoreProvider({ me: meProp, onSignOut, children }: { me: Me; onS
       const [t, c] = await Promise.all([loadTree(), loadClients().catch(() => [])]);
       setTree(t);
       setPinsState(t.user.pins ?? []);
-      setClients(c);
+      setClients(c.filter((x) => !x.deletedAt));
+      setTrashClients(c.filter((x) => !!x.deletedAt));
     } catch (e) {
       toast(errText(e), { tone: 'err' });
     }
@@ -347,6 +350,7 @@ export function StoreProvider({ me: meProp, onSignOut, children }: { me: Me; onS
     setMe,
     tree,
     clients,
+    trashClients,
     sharedWith,
     ...derived,
     reload,

@@ -58,7 +58,9 @@ def admin_post(op: str):
     body = request.get_json(silent=True, force=True)
     body = body if isinstance(body, dict) else {}
     # Emptying the whole Trash stays Owner-only; deleting one item from Trash is Editor.
-    need = "owner" if op == "purge" and body.get("all") is True else activity.NEED.get(op, "editor")
+    # emptying the Trash, and removing clients (to the Trash, back, or for good), are Owner-only
+    clients_in = isinstance(body.get("clientIds"), list) and len(body["clientIds"]) > 0
+    need = "owner" if (op == "purge" and body.get("all") is True) or (op in ("trash", "restore", "purge") and clients_in) else activity.NEED.get(op, "editor")
     user = require_user(need)
 
     manage = MANAGE_OPS.get(op) or CLIENT_OPS.get(op) or TAG_OPS.get(op)

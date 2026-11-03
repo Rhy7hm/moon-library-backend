@@ -948,11 +948,39 @@ def move(ctx: Ctx, b: Body):
     return {"ok": True}
 
 
+# ---------------------------------------------------------------- clients in the Trash
+# Removing a client moves it to the Trash: its logins stop working at once, its shares are kept for a
+# restore, and it's deleted for good with the rest of the Trash (by hand, Empty Trash, or after 90 days).
+
+def _trash_clients(ids: list[str], t: int) -> list:
+    ph = in_list(len(ids))
+    return [
+        (f"UPDATE clients SET deleted_at = ? WHERE deleted_at IS NULL AND id IN ({ph})", [t, *ids]),
+        (f"UPDATE client_sessions SET revoked_at = ? WHERE revoked_at IS NULL AND client_user_id IN (SELECT id FROM client_users WHERE client_id IN ({ph}))", [t, *ids]),
+    ]
+
+
+def purge_clients(ids: list[str]) -> int:
+    """Deletes clients for good: their logins, shares and photo go too; their folders and files stay."""
+    if not ids:
+        return 0
+    ph = in_list(len(ids))
+    rows = q.all(f"SELECT id, avatar_key FROM clients WHERE deleted_at IS NOT NULL AND id IN ({ph})", *ids)
+    found = [r["id"] for r in rows]
+    if not found:
+        return 0
+    ph = in_list(len(found))
+    q.batch([(f"DELETE FROM client_shares WHERE client_id IN ({ph})", found), (f"DELETE FROM clients WHERE id IN ({ph})", found)])
+    delete_storage([r["avatar_key"] for r in rows if r["avatar_key"]])
+    return len(found)
+
+
 def trash(ctx: Ctx, b: Body):
     folder_ids = _ids(b.get("folderIds"))
     item_ids = _ids(b.get("itemIds"))
+    client_ids = _ids(b.get("clientIds"))
     t = now()
-    stmts = []
+    stmts = _trash_clients(client_ids, t) if client_ids else []
     if folder_ids:
         stmts.append((f"UPDATE folders SET deleted_at = ? WHERE id IN ({in_list(len(folder_ids))})", [t, *folder_ids]))
     if item_ids:
@@ -964,7 +992,8 @@ def trash(ctx: Ctx, b: Body):
 def restore(ctx: Ctx, b: Body):
     folder_ids = _ids(b.get("folderIds"))
     item_ids = _ids(b.get("itemIds"))
-    stmts = []
+    client_ids = _ids(b.get("clientIds"))
+    stmts = [(f"UPDATE clients SET deleted_at = NULL WHERE id IN ({in_list(len(client_ids))})", client_ids)] if client_ids else []
     if folder_ids:
         stmts.append((f"UPDATE folders SET deleted_at = NULL WHERE id IN ({in_list(len(folder_ids))})", folder_ids))
     if item_ids:
@@ -977,10 +1006,16 @@ def purge(ctx: Ctx, b: Body):
     """Permanently removes things from the Trash. `all: true` empties it."""
     folder_ids = _ids(b.get("folderIds"))
     item_ids = _ids(b.get("itemIds"))
+    client_ids = _ids(b.get("clientIds"))
     if b.get("all") is True:
         folder_ids = [r["id"] for r in q.all("SELECT id FROM folders WHERE deleted_at IS NOT NULL")]
         item_ids = [r["id"] for r in q.all("SELECT id FROM items WHERE deleted_at IS NOT NULL")]
+        client_ids = [r["id"] for r in q.all("SELECT id FROM clients WHERE deleted_at IS NOT NULL")]
     else:
+        if client_ids:
+            binned = {r["id"] for r in q.all(f"SELECT id FROM clients WHERE deleted_at IS NOT NULL AND id IN ({in_list(len(client_ids))})", *client_ids)}
+            if set(client_ids) - binned:
+                raise HttpError(400, "Only clients in the Trash can be deleted for good. Remove the client first.")
         # only what's already in the Trash can be deleted for good: a folder that was trashed, or a
         # file that was trashed itself or sits inside a trashed folder
         if folder_ids:
@@ -1017,7 +1052,10 @@ def purge(ctx: Ctx, b: Body):
         q.run(f"DELETE FROM client_shares WHERE kind = 'folder' AND target_id IN ({in_list(len(all_folders))})", *all_folders)
         # children first, so no row ever points at a missing parent
         q.batch([("DELETE FROM folders WHERE id = ?", [fid]) for fid in reversed(all_folders)])
-    return {"ok": True, "items": len(item_ids), "folders": len(all_folders)}
+    out = {"ok": True, "items": len(item_ids), "folders": len(all_folders)}
+    if client_ids:
+        out["clients"] = purge_clients(client_ids)
+    return out
 
 
 # ---------------------------------------------------------------- large uploads (multipart)

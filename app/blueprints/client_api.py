@@ -69,7 +69,7 @@ def get_client_user() -> ClientUser | None:
     sid = sha256hex(token)
     row = q.first(
         """SELECT s.id, s.last_seen, s.expires_at, s.revoked_at, u.id AS uid, u.email, u.name, u.disabled, c.id AS cid, c.name AS cname, c.color
-             FROM client_sessions s JOIN client_users u ON u.id = s.client_user_id JOIN clients c ON c.id = u.client_id WHERE s.id = ?""",
+             FROM client_sessions s JOIN client_users u ON u.id = s.client_user_id JOIN clients c ON c.id = u.client_id WHERE s.id = ? AND c.deleted_at IS NULL""",
         sid,
     )
     t = now()
@@ -118,7 +118,7 @@ def login():
         if (recent or {}).get("n", 0) >= 20:
             raise HttpError(429, "Too many sign-in attempts. Try again in 15 minutes.")
     row = q.first(
-        "SELECT u.*, c.name AS cname, c.color AS ccolor FROM client_users u JOIN clients c ON c.id = u.client_id WHERE u.email = ?",
+        "SELECT u.*, c.name AS cname, c.color AS ccolor FROM client_users u JOIN clients c ON c.id = u.client_id WHERE u.email = ? AND c.deleted_at IS NULL",
         email,
     )
     if row and row["locked_until"] and row["locked_until"] > now():

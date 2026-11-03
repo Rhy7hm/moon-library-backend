@@ -264,6 +264,7 @@ clients = Table(
     Column("updated_at", BigInteger, nullable=False),
     Column("inbox_folder_id", VARCHAR(64, collation=BIN), nullable=True),  # where the client's own uploads go
     Column("home_folder_id", VARCHAR(64, collation=BIN), nullable=True),  # Clients › <client> in the library
+    Column("deleted_at", BigInteger, nullable=True),  # in the Trash since (removed clients can be restored)
     **TABLE_ARGS,
 )
 

@@ -1287,11 +1287,6 @@ body.is-moving .folder:not(.drop-on) { box-shadow: inset 0 0 0 1.5px color-mix(i
 .shared-folder .sf-where { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ink-3); }
 .shared-folder .sf-where::before { content: '·'; margin: 0 6px; }
 .shared-folder .until-badge { margin: 0 0 0 8px; align-self: center; height: 18px; padding: 0 7px; flex: none; }
-.sf-actions { display: flex; gap: 2px; flex: none; opacity: 0; transform: translateX(4px); transition: opacity var(--t-fast), transform var(--t) var(--spring); }
-.sf-actions .icon-btn { width: 28px; height: 28px; }
-.sf-actions .icon-btn svg { width: 15px; height: 15px; }
-.shared-folder:hover .sf-actions, .shared-folder:focus-within .sf-actions { opacity: 1; transform: none; }
-@media (hover: none) { .sf-actions { opacity: 1; transform: none; } }
 
 /* ---------------- Team ---------------- */
 .team-row { gap: 14px; }

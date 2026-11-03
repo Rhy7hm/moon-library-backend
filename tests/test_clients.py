@@ -69,7 +69,9 @@ def test_deleting_a_client_keeps_the_files(owner):
     cid = op(owner, "clients.create", {"name": "Acme"})["id"]
     f = folder(owner)
     op(owner, "shares.add", {"clientId": cid, "folderIds": [f]})
-    op(owner, "clients.delete", {"id": cid})
+    op(owner, "clients.delete", {"id": cid})  # to the Trash
+    assert op(owner, "clients.list")["clients"][0]["deletedAt"]
+    op(owner, "purge", {"clientIds": [cid]})  # and for good
     assert op(owner, "clients.list")["clients"] == []
     assert any(x["id"] == f for x in owner.get("/api/admin/tree").get_json()["folders"])
 

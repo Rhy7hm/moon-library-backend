@@ -5,12 +5,13 @@
  * Each client has a folder in the library (Clients › <client>); "New folder" here makes one inside it.
  */
 import { useMemo, useRef, useState } from 'react';
-import { fileUrl, mainFile, nameOf, titleOf, type Asset, type Client, type ClientLogin, type Folder, type Share } from './api';
+import { fileUrl, mainFile, nameOf, op, titleOf, type Asset, type Client, type ClientLogin, type Folder, type Share } from './api';
 import { encodeAvatar } from './avatar-encode';
 import { fmtAgo, fmtDate } from './format';
 import { IBriefcase, ICheck, IChevR, IClock, IDownload, IExternal, IFolder, IImage, IKey, ILink, IPencil, IPlus, ISearch, IShare, ITrash, IUsers, IX } from './icons';
 import { useStore } from './store';
-import { AssetCard, Button, ConfirmDialog, CopyButton, Dialog, Empty, FolderGlyph, PageHeader, Segmented, Thumb, type MenuItem } from './ui';
+import { AssetCard, Button, ConfirmDialog, CopyButton, Dialog, Empty, FolderGlyph, MenuButton, PageHeader, Segmented, Thumb, type MenuItem } from './ui';
+import { useActions } from './library';
 
 const COLORS = ['#0a84ff', '#30b0c7', '#34c759', '#ff9f0a', '#ff375f', '#bf5af2', '#5e5ce6', '#8e8e93'];
 const initials = (name: string) =>
@@ -272,14 +273,15 @@ export function ClientPage({ id }: { id: string }) {
       {adding && <SharePicker client={c} onClose={() => setAdding(false)} />}
       {deleting && (
         <ConfirmDialog
-          title={`Remove ${c.name}?`}
-          text="The client and their share list are removed. Nothing is deleted from the library."
-          action="Remove client"
+          title={`Move ${c.name} to the Trash?`}
+          text="Their website logins stop working straight away. You can restore them from the Trash for 90 days, with everything they had shared. Their folders and files stay in the library."
+          action="Move to Trash"
           danger
           onClose={() => setDeleting(false)}
           onConfirm={async () => {
             setDeleting(false);
-            if (await s.run('clients.delete', { id: c.id }, `Removed ${c.name}`)) s.go({ page: 'clients' });
+            const undo = () => op('restore', { folderIds: [], itemIds: [], clientIds: [c.id] });
+            if (await s.run('clients.delete', { id: c.id }, `Moved ${c.name} to the Trash`, undo)) s.go({ page: 'clients' });
           }}
         />
       )}
@@ -297,6 +299,17 @@ function ClientBody({ c, onEdit, onAdd, onNewFolder, onDelete, modals }: { c: Cl
   const [until, setUntil] = useState<{ sh: Share; label: string } | null>(null);
   const home = c.homeFolderId ? s.byId.get(c.homeFolderId) : undefined;
   const inbox = c.inboxFolderId ? s.byId.get(c.inboxFolderId) : undefined;
+  const { folderMenu, dialogs: folderDialogs } = useActions();
+  // a shared folder's menu: its end date and sharing first, then everything the Library's menu has
+  const sharedMenu = (sh: Share, f: Folder | undefined): MenuItem[] => [
+    ...(s.canEdit
+      ? ([
+          ...(f ? [{ label: sh.expiresAt ? 'Change end date…' : 'Set end date…', icon: <IClock />, onClick: () => setUntil({ sh, label: nameOf(f) }) }] : []),
+          { label: `Stop sharing with ${c.name}`, icon: <IX />, danger: true, onClick: () => remove(sh, f ? nameOf(f) : 'folder') },
+        ] as MenuItem[])
+      : []),
+    ...(f && !f.deletedAt ? [...(s.canEdit ? (['sep'] as MenuItem[]) : []), ...folderMenu(f)] : []),
+  ];
 
   return (
     <div className="page">
@@ -346,8 +359,8 @@ function ClientBody({ c, onEdit, onAdd, onNewFolder, onDelete, modals }: { c: Cl
         <section>
           <h2 className="section-title">In the library</h2>
           <div className="folders">
-            {home && <SharedFolder f={home} note="Their folder" />}
-            {inbox && <SharedFolder f={inbox} note="Files they sent you" />}
+            {home && <SharedFolder f={home} note="Their folder" menu={folderMenu(home)} />}
+            {inbox && <SharedFolder f={inbox} note="Files they sent you" menu={folderMenu(inbox)} />}
           </div>
         </section>
       )}
@@ -368,13 +381,7 @@ function ClientBody({ c, onEdit, onAdd, onNewFolder, onDelete, modals }: { c: Cl
                 {folders.map((sh) => {
                   const f = sh.targetId ? s.byId.get(sh.targetId) : undefined;
                   return (
-                    <SharedFolder
-                      key={sh.id}
-                      f={f}
-                      share={sh}
-                      onUntil={s.canEdit && f ? () => setUntil({ sh, label: nameOf(f) }) : undefined}
-                      onRemove={s.canEdit ? () => remove(sh, f ? nameOf(f) : 'folder') : undefined}
-                    />
+                    <SharedFolder key={sh.id} f={f} share={sh} menu={sharedMenu(sh, f)} />
                   );
                 })}
               </div>
@@ -439,6 +446,7 @@ function ClientBody({ c, onEdit, onAdd, onNewFolder, onDelete, modals }: { c: Cl
         </>
       )}
       {modals}
+      {folderDialogs}
       {until && <UntilDialog c={c} sh={until.sh} label={until.label} onClose={() => setUntil(null)} />}
     </div>
   );
@@ -647,7 +655,7 @@ function PasswordDialog({ email, password, fresh, onClose }: { email: string; pa
   );
 }
 
-function SharedFolder({ f, share, note, onUntil, onRemove }: { f: Folder | undefined; share?: Share; note?: string; onUntil?: () => void; onRemove?: () => void }) {
+function SharedFolder({ f, share, note, menu }: { f: Folder | undefined; share?: Share; note?: string; menu?: MenuItem[] }) {
   const s = useStore();
   if (!f) return null;
   const count = (id: string): number => s.assetsIn(id).length + s.children(id).reduce((n, k) => n + count(k.id), 0);
@@ -671,20 +679,7 @@ function SharedFolder({ f, share, note, onUntil, onRemove }: { f: Folder | undef
           {share && <UntilBadge sh={share} />}
         </small>
       </div>
-      {(onUntil || onRemove) && (
-        <span className="sf-actions">
-          {onUntil && (
-            <button className="icon-btn" aria-label="Set end date" title={share?.expiresAt ? 'Change end date' : 'Set end date'} onClick={(e) => (e.stopPropagation(), onUntil())}>
-              <IClock />
-            </button>
-          )}
-          {onRemove && (
-            <button className="icon-btn" aria-label="Stop sharing" title="Stop sharing" onClick={(e) => (e.stopPropagation(), onRemove())}>
-              <IX />
-            </button>
-          )}
-        </span>
-      )}
+      {menu && menu.length > 0 && <MenuButton items={menu} label={`More for ${nameOf(f)}`} />}
     </div>
   );
 }

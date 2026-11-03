@@ -1,8 +1,9 @@
 /* Home, Trash, Insights, Activity, Team and Settings. */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { assetSize, errText, mainFile, nameOf, op, titleOf, type Role } from './api';
+import { assetSize, errText, mainFile, nameOf, op, titleOf, type Asset, type Client, type Folder, type Role } from './api';
 import { fmtAgo, fmtDate, fmtSize, greeting, typeOf } from './format';
 import { IChevD, IDoc, IImage, IKey, ILock, IPen, IPlus, IPulse, IRestore, ITrash, IUnlock, IUpload, IVideo } from './icons';
+import { ClientAvatar } from './clients';
 import { shatter } from './shatter';
 import { ShredDialog, type ShredItem } from './shredder';
 import { useStore } from './store';
@@ -156,7 +157,7 @@ const KIND = { image: 'Image', video: 'Video', document: 'Document', design: 'De
 
 export function TrashPage() {
   const s = useStore();
-  const [shred, setShred] = useState<null | { all: true } | { folderIds: string[]; itemIds: string[]; item: ShredItem }>(null);
+  const [shred, setShred] = useState<null | { all: true } | { folderIds: string[]; itemIds: string[]; clientIds: string[]; item: ShredItem }>(null);
   // what the shredder just deleted: its rows break like glass once the window closes, and only then
   // does the list reload (reloading straight away would make them blink out behind the window)
   const purged = useRef<string[] | null>(null);
@@ -172,17 +173,27 @@ export function TrashPage() {
     s.toast('Deleted for good', { tone: 'ok' });
     await s.reload();
   };
-  const rows = [
-    ...s.trashFolders.map((f) => ({ key: 'f' + f.id, at: f.deletedAt!, folder: f, asset: null })),
-    ...s.trashAssets.map((a) => ({ key: 'i' + a.id, at: a.deletedAt!, folder: null, asset: a })),
+  const rows: { key: string; at: number; folder: Folder | null; asset: Asset | null; client: Client | null }[] = [
+    ...s.trashFolders.map((f) => ({ key: 'f' + f.id, at: f.deletedAt!, folder: f, asset: null, client: null })),
+    ...s.trashAssets.map((a) => ({ key: 'i' + a.id, at: a.deletedAt!, folder: null, asset: a, client: null })),
+    ...s.trashClients.map((c) => ({ key: 'c' + c.id, at: c.deletedAt!, folder: null, asset: null, client: c })),
   ].sort((a, b) => b.at - a.at);
+  // removed clients can only be restored or deleted for good by an Owner
+  const canTouch = (r: (typeof rows)[number]) => s.canEdit && (!r.client || s.isOwner);
   const daysLeft = (at: number) => Math.max(0, 90 - Math.floor((Date.now() - at) / 864e5));
   const sizeOf = (r: (typeof rows)[number]) => (r.asset ? assetSize(r.asset) : 0);
   const total = rows.reduce((n, r) => n + sizeOf(r), 0);
   const soonest = rows.length ? Math.min(...rows.map((r) => daysLeft(r.at))) : 0;
-  const ids = (list: typeof rows) => ({ folderIds: list.flatMap((r) => (r.folder ? [r.folder.id] : [])), itemIds: list.flatMap((r) => (r.asset ? [r.asset.id] : [])) });
-  const restore = (list: typeof rows, label: string) => s.run('restore', ids(list), label);
-  const nameRow = (r: (typeof rows)[number]) => (r.asset ? titleOf(r.asset) : nameOf(r.folder!));
+  const ids = (list: typeof rows) => ({
+    folderIds: list.flatMap((r) => (r.folder ? [r.folder.id] : [])),
+    itemIds: list.flatMap((r) => (r.asset ? [r.asset.id] : [])),
+    clientIds: list.flatMap((r) => (r.client ? [r.client.id] : [])),
+  });
+  const restore = (list: typeof rows, label: string) => s.run('restore', ids(list.filter(canTouch)), label);
+  const nameRow = (r: (typeof rows)[number]) => (r.asset ? titleOf(r.asset) : r.client ? r.client.name : nameOf(r.folder!));
+  const thumbRow = (r: (typeof rows)[number]) => (r.asset ? <Thumb asset={r.asset} /> : r.client ? <ClientAvatar c={r.client} size={40} /> : <FolderGlyph f={r.folder!} />);
+  const kindRow = (r: (typeof rows)[number]) =>
+    r.asset ? KIND[typeOf(mainFile(r.asset))] : r.client ? `Client · ${r.client.logins.length} ${r.client.logins.length === 1 ? 'login' : 'logins'} · ${r.client.shares.length} shared` : 'Folder';
 
   // newest first, in three groups
   const day = 864e5;
@@ -196,7 +207,7 @@ export function TrashPage() {
     <div className="page">
       <PageHeader
         title="Trash"
-        sub="Deleted files and folders stay here for 90 days, then they’re removed for good."
+        sub="Deleted files, folders and clients stay here for 90 days, then they’re removed for good."
         actions={
           s.isOwner &&
           rows.length > 0 && (
@@ -216,7 +227,7 @@ export function TrashPage() {
               {total > 0 && <> · {fmtSize(total)}</>} · the next one is removed in <b>{soonest}</b> {soonest === 1 ? 'day' : 'days'}
             </span>
             {s.canEdit && rows.length > 1 && (
-              <Button size="sm" icon={<IRestore />} onClick={() => restore(rows, `Restored ${rows.length} items`)}>
+              <Button size="sm" icon={<IRestore />} onClick={() => restore(rows, `Restored ${rows.filter(canTouch).length} items`)}>
                 Restore all
               </Button>
             )}
@@ -229,12 +240,12 @@ export function TrashPage() {
                   const left = daysLeft(r.at);
                   return (
                     <div className={`list-row trash-row${left <= 7 ? ' soon' : ''}`} key={r.key} data-key={r.key}>
-                      <span className="list-thumb">{r.asset ? <Thumb asset={r.asset} /> : <FolderGlyph f={r.folder!} />}</span>
+                      <span className="list-thumb">{thumbRow(r)}</span>
                       <span className="list-text">
                         <strong>{nameRow(r)}</strong>
                         <small>
-                          {r.asset ? KIND[typeOf(mainFile(r.asset))] : 'Folder'}
-                          {sizeOf(r) > 0 && <> · {fmtSize(sizeOf(r))}</>} · deleted {fmtAgo(r.at)}
+                          {kindRow(r)}
+                          {sizeOf(r) > 0 && <> · {fmtSize(sizeOf(r))}</>} · {r.client ? 'removed' : 'deleted'} {fmtAgo(r.at)}
                         </small>
                       </span>
                       <span className="trash-left" title={`Removed for good in ${left} day${left === 1 ? '' : 's'}`}>
@@ -244,13 +255,13 @@ export function TrashPage() {
                         <small>{left} days left</small>
                       </span>
                       <span className="trash-actions">
-                        {s.canEdit && (
-                          <Button size="sm" icon={<IRestore />} onClick={() => restore([r], 'Restored')}>
+                        {canTouch(r) && (
+                          <Button size="sm" icon={<IRestore />} onClick={() => restore([r], r.client ? `${r.client.name} is back — their logins work again` : 'Restored')}>
                             Restore
                           </Button>
                         )}
-                        {/* Owners and Editors can delete one thing for good; emptying all of the Trash is Owner-only */}
-                        {s.canEdit && (
+                        {/* Owners and Editors can delete one thing for good (clients: Owners); emptying all of the Trash is Owner-only */}
+                        {canTouch(r) && (
                           <Button
                             size="sm"
                             kind="danger"
@@ -260,8 +271,8 @@ export function TrashPage() {
                                 ...ids([r]),
                                 item: {
                                   title: nameRow(r),
-                                  meta: r.asset ? `${KIND[typeOf(mainFile(r.asset))]} · ${fmtSize(sizeOf(r))}` : 'Folder and everything in it',
-                                  thumb: r.asset ? <Thumb asset={r.asset} /> : <FolderGlyph f={r.folder!} />,
+                                  meta: r.asset ? `${KIND[typeOf(mainFile(r.asset))]} · ${fmtSize(sizeOf(r))}` : r.client ? 'Client, logins and share list — their files stay in the library' : 'Folder and everything in it',
+                                  thumb: thumbRow(r),
                                 },
                               })
                             }
@@ -286,16 +297,16 @@ export function TrashPage() {
               ? {
                   title: 'Everything in Trash',
                   meta: `${rows.length} ${rows.length === 1 ? 'item' : 'items'}${total ? ` · ${fmtSize(total)}` : ''}`,
-                  thumb: rows[0]?.asset ? <Thumb asset={rows[0].asset} /> : <ITrash />,
+                  thumb: rows[0] ? thumbRow(rows[0]) : <ITrash />,
                   stack: rows.length > 1 ? rows.length : undefined,
                 }
               : shred.item
           }
           onShred={async () => {
-            const body = 'all' in shred ? { all: true, folderIds: [], itemIds: [] } : { folderIds: shred.folderIds, itemIds: shred.itemIds };
+            const body = 'all' in shred ? { all: true, folderIds: [], itemIds: [] } : { folderIds: shred.folderIds, itemIds: shred.itemIds, clientIds: shred.clientIds };
             try {
               await op('purge', body); // not s.run: that reloads the list at once
-              purged.current = 'all' in shred ? rows.map((r) => r.key) : [...shred.folderIds.map((id) => 'f' + id), ...shred.itemIds.map((id) => 'i' + id)];
+              purged.current = 'all' in shred ? rows.map((r) => r.key) : [...shred.folderIds.map((id) => 'f' + id), ...shred.itemIds.map((id) => 'i' + id), ...shred.clientIds.map((id) => 'c' + id)];
               return true;
             } catch (e) {
               s.toast(errText(e), { tone: 'err' });

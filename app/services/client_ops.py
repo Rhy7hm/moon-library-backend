@@ -21,7 +21,8 @@ Removing a share never deletes the file. Permanently deleting a file or folder r
   clients.update     { id, name?, email?, notes?, color? }        (Editor)
   clients.setAvatar  { id, data }  JPEG/PNG/WEBP as base64 → { avatarKey }  (Editor)
   clients.clearAvatar { id }                                       (Editor)
-  clients.delete     { id }  (its shares go with it; the home folder stays)  (Owner)
+  clients.delete     { id }  moves the client to the Trash: logins stop working, shares are kept for a restore,
+                     the home folder and files stay; restore / delete for good from the Trash   (Owner)
   clients.newFolder  { clientId, name, share? = true } → { id }   a folder in the client's home folder (Editor)
   shares.add         { clientId, folderIds?, itemIds?, links?: [{ url, title }], expiresAt? } → { added, skipped }
                      expiresAt (ms, or null for no end date) also applies to any of these already shared
@@ -75,10 +76,18 @@ def _ids(v) -> list[str]:
 
 
 def _client(cid) -> dict:
-    row = q.first("SELECT id, name, avatar_key FROM clients WHERE id = ?", str(cid or ""))
+    row = q.first("SELECT id, name, avatar_key, deleted_at FROM clients WHERE id = ?", str(cid or ""))
     if not row:
         raise HttpError(404, "Client not found")
+    if row["deleted_at"]:
+        raise HttpError(409, f"{row['name']} is in the Trash. Restore them first.")
     return row
+
+
+def _name_taken(name: str, other: str | None = None) -> None:
+    r = q.first("SELECT id, deleted_at FROM clients WHERE name = ? AND id != ?", name, other or "")
+    if r:
+        raise HttpError(409, f"“{name}” is in the Trash — restore it from there, or delete it for good first." if r["deleted_at"] else f"There's already a client called “{name}”")
 
 
 def _share_out(r: dict) -> dict:
@@ -163,9 +172,9 @@ def clients_new_folder(user: SessionUser, b: dict):
 
 def clients_list(user: SessionUser, b: dict):
     if at_least(user.role, "editor"):  # clients added before home folders existed get one
-        for r in q.all("SELECT id FROM clients WHERE home_folder_id IS NULL"):
+        for r in q.all("SELECT id FROM clients WHERE home_folder_id IS NULL AND deleted_at IS NULL"):
             ensure_home(r["id"], user.username)
-    rows = q.all("SELECT id, name, email, notes, color, avatar_key, created_at, created_by, updated_at, inbox_folder_id, home_folder_id FROM clients ORDER BY name")
+    rows = q.all("SELECT id, name, email, notes, color, avatar_key, created_at, created_by, updated_at, inbox_folder_id, home_folder_id, deleted_at FROM clients ORDER BY name")
     logins: dict[str, list] = {}
     for u in q.all("SELECT id, client_id, email, name, disabled, last_login_at, created_at FROM client_users ORDER BY created_at"):
         logins.setdefault(u["client_id"], []).append(
@@ -191,6 +200,7 @@ def clients_list(user: SessionUser, b: dict):
                 "logins": logins.get(r["id"], []),
                 "inboxFolderId": r["inbox_folder_id"],
                 "homeFolderId": r["home_folder_id"],
+                "deletedAt": r["deleted_at"],
             }
             for r in rows
         ]
@@ -199,8 +209,7 @@ def clients_list(user: SessionUser, b: dict):
 
 def clients_create(user: SessionUser, b: dict):
     name = _text(b.get("name"), "Name", 200, required=True)
-    if q.first("SELECT id FROM clients WHERE name = ?", name):
-        raise HttpError(409, f"There's already a client called “{name}”")
+    _name_taken(name)
     cid, t = new_id(), now()
     q.run(
         "INSERT INTO clients (id, name, email, notes, color, created_at, created_by, updated_at) VALUES (?,?,?,?,?,?,?,?)",
@@ -216,8 +225,7 @@ def clients_update(user: SessionUser, b: dict):
     sets, vals = [], []
     if "name" in b:
         name = _text(b.get("name"), "Name", 200, required=True)
-        if q.first("SELECT id FROM clients WHERE name = ? AND id != ?", name, c["id"]):
-            raise HttpError(409, f"There's already a client called “{name}”")
+        _name_taken(name, c["id"])
         sets.append("name = ?")
         vals.append(name)
     if "email" in b:
@@ -264,10 +272,11 @@ def clients_clear_avatar(user: SessionUser, b: dict):
 
 def clients_delete(user: SessionUser, b: dict):
     c = _client(b.get("id"))
-    q.batch([("DELETE FROM client_shares WHERE client_id = ?", [c["id"]]), ("DELETE FROM clients WHERE id = ?", [c["id"]])])
-    if c.get("avatar_key"):
-        storage().delete([c["avatar_key"]])
-    write_log(user, {"kind": "content", "action": "clients.delete", "summary": f"Removed client “{c['name']}” (their files stay in the library)", "targetType": "client", "targetIds": [c["id"]]})
+    q.batch(admin_ops._trash_clients([c["id"]], now()))
+    write_log(user, {
+        "kind": "content", "action": "trash", "summary": f"Deleted (moved to Trash) 👤 {c['name']}", "targetType": "client", "targetIds": [c["id"]],
+        "before": {"folderIds": [], "itemIds": [], "clientIds": [c["id"]]},
+    })
     return {"ok": True}
 
 

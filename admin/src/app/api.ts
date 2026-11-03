@@ -59,7 +59,7 @@ export type Tree = { folders: Folder[]; items: Asset[]; tags?: Tag[]; user: Me &
 
 export type Share = { id: string; kind: 'folder' | 'item' | 'link'; targetId: string | null; url: string | null; title: string | null; createdAt: number; createdBy: string | null; expiresAt?: number | null };
 export type ClientLogin = { id: string; email: string; name: string; disabled: boolean; lastLoginAt: number | null; createdAt: number };
-export type Client = { id: string; name: string; email: string | null; notes: string | null; color: string | null; avatarKey: string | null; createdAt: number; createdBy: string | null; shares: Share[]; logins: ClientLogin[]; inboxFolderId: string | null; homeFolderId: string | null };
+export type Client = { id: string; name: string; email: string | null; notes: string | null; color: string | null; avatarKey: string | null; createdAt: number; createdBy: string | null; shares: Share[]; logins: ClientLogin[]; inboxFolderId: string | null; homeFolderId: string | null; deletedAt?: number | null };
 
 export const op = <T = { ok: boolean }>(name: string, body: unknown = {}) => call<T>(ctx, name, body);
 export const loadTree = () => call<Tree>(ctx, 'tree');

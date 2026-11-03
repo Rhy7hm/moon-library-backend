@@ -307,24 +307,27 @@ def plan_log(op: str, b: dict) -> Plan | None:
     if op in ("trash", "restore", "purge"):
         folder_ids = _arr(b.get("folderIds"))
         item_ids = _arr(b.get("itemIds"))
+        client_ids = _arr(b.get("clientIds"))
         if op == "purge" and b.get("all") is True:
             folder_ids = [r["id"] for r in q.all("SELECT id FROM folders WHERE deleted_at IS NOT NULL")]
             item_ids = [r["id"] for r in q.all("SELECT id FROM items WHERE deleted_at IS NOT NULL")]
+            client_ids = [r["id"] for r in q.all("SELECT id FROM clients WHERE deleted_at IS NOT NULL")]
         fn = _folder_names(folder_ids)
         info = _item_info(item_ids)
-        names = [f"📁 {fn.get(i, '?')}" for i in folder_ids] + [info.get(i, {}).get("title", "?") for i in item_ids]
+        cn = {r["id"]: r["name"] for r in q.all(f"SELECT id, name FROM clients WHERE id IN ({in_list(len(client_ids))})", *client_ids)} if client_ids else {}
+        names = [f"👤 {cn.get(i, '?')}" for i in client_ids] + [f"📁 {fn.get(i, '?')}" for i in folder_ids] + [info.get(i, {}).get("title", "?") for i in item_ids]
         if not names:
             return None
         verb = "Deleted (moved to Trash)" if op == "trash" else "Restored from Trash" if op == "restore" else "Deleted forever"
-        ttype = "mixed" if folder_ids and item_ids else "folder" if folder_ids else "item"
+        ttype = "mixed" if sum(map(bool, (folder_ids, item_ids, client_ids))) > 1 else "client" if client_ids else "folder" if folder_ids else "item"
 
         def entry(r):
             e = {
-                "kind": c, "action": op, "summary": f"{verb} {_list(names)}", "targetType": ttype, "targetIds": [*folder_ids, *item_ids],
+                "kind": c, "action": op, "summary": f"{verb} {_list(names)}", "targetType": ttype, "targetIds": [*client_ids, *folder_ids, *item_ids],
                 "folderId": info.get(item_ids[0], {}).get("folderId") if item_ids else None, "detail": {"names": names},
             }
             if op != "purge":
-                e["before"] = {"folderIds": folder_ids, "itemIds": item_ids}
+                e["before"] = {"folderIds": folder_ids, "itemIds": item_ids, **({"clientIds": client_ids} if client_ids else {})}
             return e
 
         return entry
@@ -441,7 +444,11 @@ def cleanup(force: bool = False) -> dict:
             },
             with_request=False,
         )
-    return {"ran": True, "versions": len(vs), "folders": len(folder_ids), "items": len(item_ids)}
+    old_clients = [r["id"] for r in q.all("SELECT id FROM clients WHERE deleted_at IS NOT NULL AND deleted_at < ? LIMIT 50", cut)]
+    if old_clients:
+        n = admin_ops.purge_clients(old_clients)
+        write_log({"id": "system", "username": "system"}, {"kind": "content", "action": "purge.auto", "summary": f"Trash emptied automatically: {n} client{'' if n == 1 else 's'} removed more than 90 days ago"}, with_request=False)
+    return {"ran": True, "versions": len(vs), "folders": len(folder_ids), "items": len(item_ids), "clients": len(old_clients)}
 
 
 def _unused_keys(keys: list[str], version_ids: list[str]) -> list[str]:

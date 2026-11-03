@@ -61,7 +61,8 @@ type Ask =
   | { kind: 'tag'; itemIds: string[] }
   | null;
 
-function useActions() {
+/** The ••• menus for files and folders, and the dialogs they open (also used on the client page). */
+export function useActions() {
   const s = useStore();
   const [ask, setAsk] = useState<Ask>(null);
 
