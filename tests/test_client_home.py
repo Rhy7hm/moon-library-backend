@@ -106,3 +106,12 @@ def test_drive_backup_is_sorted_by_client(app, owner, gdrive):  # noqa: F811
 
     assert drive_path("lion.png")[1:] == ["Moon Library backup", "Clients", "Acme", "CNY 2027"]
     assert drive_path("mama.png")[1:] == ["Moon Library backup", "linmama"]
+
+
+def test_clients_home_returns_or_remakes_their_folder(owner):
+    cid = op(owner, "clients.create", {"name": "Acme"})["id"]
+    home = op(owner, "clients.home", {"clientId": cid})["id"]
+    assert home == client(owner, cid)["homeFolderId"]
+    op(owner, "trash", {"folderIds": [home]})
+    again = op(owner, "clients.home", {"clientId": cid})["id"]
+    assert again != home and path_of(tree(owner), again) == ["Clients", "Acme"]

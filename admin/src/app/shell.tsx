@@ -12,6 +12,7 @@ import { AssetSheet } from './sheet';
 import { Spotlight } from './spotlight';
 import { ClientPage, ClientsPage } from './clients';
 import { useStore, type Route } from './store';
+import { GlobalDrop } from './upload-to';
 import { gsap, pop, settle } from './motion';
 import { useTheme } from './theme';
 import { MenuButton, Toasts, UploadTray, UserAvatar, useMoveDrop } from './ui';
@@ -379,6 +380,7 @@ export function Shell({ onSignedOut }: { onSignedOut: () => void }) {
 
       <Spotlight open={spot} onClose={() => setSpot(false)} onUpload={s.canEdit && current ? () => upRef.current?.click() : null} />
       <AssetSheet />
+      <GlobalDrop />
       <UploadTray />
       <Toasts />
     </div>

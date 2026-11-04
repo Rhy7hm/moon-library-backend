@@ -4,12 +4,12 @@
  * decides what that is, makes their logins, and sees the files they sent ("From the client").
  * Each client has a folder in the library (Clients › <client>); "New folder" here makes one inside it.
  */
-import { useMemo, useRef, useState } from 'react';
-import { fileUrl, mainFile, nameOf, op, titleOf, type Asset, type Client, type ClientLogin, type Folder, type Share } from './api';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { errText, fileUrl, mainFile, nameOf, op, titleOf, type Asset, type Client, type ClientLogin, type Folder, type Share } from './api';
 import { encodeAvatar } from './avatar-encode';
 import { fmtAgo, fmtDate } from './format';
-import { IBriefcase, ICheck, IChevR, IClock, IDownload, IExternal, IFolder, IImage, IKey, ILink, IPencil, IPlus, ISearch, IShare, ITrash, IUsers, IX } from './icons';
-import { useStore } from './store';
+import { IBriefcase, ICheck, IChevR, IClock, IDownload, IExternal, IFolder, IImage, IKey, ILink, IPencil, IPlus, ISearch, IShare, ITrash, IUpload, IUsers, IX } from './icons';
+import { useFileDrop, useStore } from './store';
 import { AssetCard, Button, ConfirmDialog, CopyButton, Dialog, Empty, FolderGlyph, MenuButton, PageHeader, Segmented, Thumb, type MenuItem } from './ui';
 import { useActions } from './library';
 
@@ -300,6 +300,20 @@ function ClientBody({ c, onEdit, onAdd, onNewFolder, onDelete, modals }: { c: Cl
   const home = c.homeFolderId ? s.byId.get(c.homeFolderId) : undefined;
   const inbox = c.inboxFolderId ? s.byId.get(c.inboxFolderId) : undefined;
   const { folderMenu, dialogs: folderDialogs } = useActions();
+  // files dropped on a client's page go straight into their folder
+  const dropHere = useCallback(
+    async (files: File[]) => {
+      if (!files.length) return;
+      try {
+        const { id } = await op<{ id: string }>('clients.home', { clientId: c.id });
+        void s.upload(files, id);
+      } catch (e) {
+        s.toast(errText(e), { tone: 'err' });
+      }
+    },
+    [c.id, s],
+  );
+  const over = useFileDrop(dropHere, s.canEdit);
   // a shared folder's menu: its end date and sharing first, then everything the Library's menu has
   const sharedMenu = (sh: Share, f: Folder | undefined): MenuItem[] => [
     ...(s.canEdit
@@ -444,6 +458,15 @@ function ClientBody({ c, onEdit, onAdd, onNewFolder, onDelete, modals }: { c: Cl
             </section>
           )}
         </>
+      )}
+      {over && (
+        <div className="drop-overlay">
+          <div>
+            <IUpload />
+            <strong>Drop to upload to {c.name}</strong>
+            <span>Into their folder, Clients › {c.name}</span>
+          </div>
+        </div>
       )}
       {modals}
       {folderDialogs}

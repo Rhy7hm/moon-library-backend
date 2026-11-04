@@ -1,12 +1,13 @@
 /* Home, Trash, Insights, Activity, Team and Settings. */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { assetSize, errText, mainFile, nameOf, op, titleOf, type Asset, type Client, type Folder, type Role } from './api';
 import { fmtAgo, fmtDate, fmtSize, greeting, typeOf } from './format';
 import { IChevD, IDoc, IImage, IKey, ILock, IPen, IPlus, IPulse, IRestore, ITrash, IUnlock, IUpload, IVideo } from './icons';
 import { ClientAvatar } from './clients';
 import { shatter } from './shatter';
 import { ShredDialog, type ShredItem } from './shredder';
-import { useStore } from './store';
+import { useFileDrop, useStore } from './store';
+import { UploadToDialog } from './upload-to';
 import { AssetCard, Button, ConfirmDialog, CopyButton, Dialog, Empty, FolderGlyph, MenuButton, PageHeader, Segmented, Thumb, UserAvatar, type MenuItem } from './ui';
 
 /* ---------------- Home ---------------- */
@@ -23,7 +24,10 @@ const MIX = [
 export function HomePage() {
   const s = useStore();
   const input = useRef<HTMLInputElement>(null);
-  const [target, setTarget] = useState<string>('');
+  // files dropped anywhere on Home (or chosen with Quick upload) ask where they go
+  const [pending, setPending] = useState<File[] | null>(null);
+  const onFiles = useCallback((files: File[]) => files.length && setPending(files), []);
+  const over = useFileDrop(onFiles, s.canEdit && !pending);
   const recent = s.assets.slice(0, 8);
   const week = s.assets.filter((a) => a.date > Date.now() - 7 * 864e5).length;
   const total = s.assets.reduce((n, a) => n + (mainFile(a)?.size ?? 0), 0);
@@ -87,27 +91,29 @@ export function HomePage() {
         )}
       </section>
 
-      {s.canEdit && top.length > 0 && (
-        <div className="quick-upload">
+      {s.canEdit && (
+        <div className="quick-upload" onClick={() => input.current?.click()} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && input.current?.click()}>
           <div className="quick-icon"><IUpload /></div>
           <div className="quick-text">
             <strong>Quick upload</strong>
-            <span>Pick a folder, then choose files. Previews and ad formats are detected automatically.</span>
+            <span>Drop files anywhere on this page, then pick where they go — the Library, a folder, or a client (new ones too).</span>
           </div>
-          <select className="select" value={target} onChange={(e) => setTarget(e.target.value)} aria-label="Upload to folder">
-            <option value="">Choose a folder…</option>
-            {s.folders.map((f) => (
-              <option key={f.id} value={f.id}>
-                {s.path(f.id).map(nameOf).join(' › ')}
-              </option>
-            ))}
-          </select>
-          <Button kind="primary" disabled={!target} onClick={() => input.current?.click()}>
+          <Button kind="primary" icon={<IUpload />} onClick={(e) => (e.stopPropagation(), input.current?.click())}>
             Choose files
           </Button>
-          <input ref={input} type="file" multiple hidden onChange={(e) => (s.upload(Array.from(e.target.files ?? []), target), (e.target.value = ''))} />
+          <input ref={input} type="file" multiple hidden onChange={(e) => (onFiles(Array.from(e.target.files ?? [])), (e.target.value = ''))} />
         </div>
       )}
+      {over && (
+        <div className="drop-overlay">
+          <div>
+            <IUpload />
+            <strong>Drop to upload</strong>
+            <span>Next, choose where they go</span>
+          </div>
+        </div>
+      )}
+      {pending && <UploadToDialog files={pending} onClose={() => setPending(null)} />}
 
       <section>
         <div className="section-row">

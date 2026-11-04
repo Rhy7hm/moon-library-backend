@@ -24,6 +24,7 @@ Removing a share never deletes the file. Permanently deleting a file or folder r
   clients.delete     { id }  moves the client to the Trash: logins stop working, shares are kept for a restore,
                      the home folder and files stay; restore / delete for good from the Trash   (Owner)
   clients.newFolder  { clientId, name, share? = true } → { id }   a folder in the client's home folder (Editor)
+  clients.home       { clientId } → { id }   the client's home folder, made if it's missing (Editor)
   shares.add         { clientId, folderIds?, itemIds?, links?: [{ url, title }], expiresAt? } → { added, skipped }
                      expiresAt (ms, or null for no end date) also applies to any of these already shared
   shares.expire      { clientId, ids, expiresAt }  — set or clear the end date of shares
@@ -150,6 +151,10 @@ def _rename_home(c: dict, name: str) -> None:
     home = q.first("SELECT f.id, f.name FROM clients c JOIN folders f ON f.id = c.home_folder_id WHERE c.id = ?", c["id"])
     if home:
         admin_ops.folder_update(admin_ops.Ctx("system"), {"id": home["id"], "name": {**admin_ops._parse_name(home["name"]), "en": name}})
+
+
+def clients_home(user: SessionUser, b: dict):
+    return {"id": ensure_home(_client(b.get("clientId"))["id"], user.username)}
 
 
 def clients_new_folder(user: SessionUser, b: dict):
@@ -437,6 +442,7 @@ CLIENT_OPS = {
     "clients.clearAvatar": clients_clear_avatar,
     "clients.delete": clients_delete,
     "clients.newFolder": clients_new_folder,
+    "clients.home": clients_home,
     "shares.add": shares_add,
     "shares.expire": shares_expire,
     "shares.remove": shares_remove,

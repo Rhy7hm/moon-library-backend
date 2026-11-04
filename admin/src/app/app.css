@@ -574,7 +574,8 @@ section { margin-bottom: 28px; }
 .quick-icon { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; background: var(--accent-soft); color: var(--accent); }
 .quick-text { flex: 1; min-width: 200px; display: flex; flex-direction: column; }
 .quick-text span { color: var(--ink-2); font-size: 12.5px; }
-.quick-upload .select { min-width: 220px; }
+.quick-upload { cursor: pointer; transition: box-shadow var(--t-fast), transform var(--t) var(--spring); }
+.quick-upload:hover { box-shadow: var(--shadow-raise); }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px 0 6px; border: 0; border-radius: 99px; background: var(--surface); box-shadow: var(--shadow-card); font-weight: 560; transition: transform var(--t) var(--spring), box-shadow var(--t); }
 .chip:hover { transform: translateY(-1px); box-shadow: var(--shadow-raise); }
@@ -1310,3 +1311,41 @@ body.is-moving .folder:not(.drop-on) { box-shadow: inset 0 0 0 1.5px color-mix(i
 .role-cards b { font-size: 12.5px; font-weight: 650; }
 .role-cards span { font-size: 12px; color: var(--ink-3); }
 @media (max-width: 720px) { .role-cards { grid-template-columns: 1fr; } }
+
+/* ---------------- "Upload to…" (Home) ---------------- */
+.upto { display: grid; gap: 14px; }
+.upto > .seg { width: 100%; }
+.upto > .seg button, .upto-sub .seg button { flex: 1; }
+.upto-files { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: var(--r); background: var(--surface-2); min-width: 0; }
+.upto-files > span:last-child { display: grid; gap: 1px; min-width: 0; }
+.upto-files b { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.upto-files small { font-size: 12px; color: var(--ink-3); }
+.upto-thumbs { display: flex; flex: none; align-items: center; }
+.upto-thumbs img { width: 34px; height: 34px; object-fit: cover; border-radius: 8px; box-shadow: 0 0 0 2px var(--surface-2); }
+.upto-thumbs img + img { margin-left: -12px; }
+.upto-thumbs > svg { width: 22px; height: 22px; color: var(--accent); margin: 0 6px; }
+.upto-list { display: grid; gap: 6px; }
+.upto-scroll { display: grid; gap: 2px; max-height: 260px; overflow: auto; margin: 0 -4px; padding: 0 4px; }
+.upto-scroll.short { max-height: 210px; }
+.upto-row { display: flex; align-items: center; gap: 11px; width: 100%; padding: 8px 10px; border: 0; border-radius: 10px; background: none; text-align: left; color: var(--ink); cursor: pointer; transition: background var(--t-fast); }
+.upto-row:hover { background: var(--surface-2); }
+.upto-row.on { background: var(--accent-soft); box-shadow: inset 0 0 0 1.5px var(--accent); }
+.upto-ico { display: grid; place-items: center; width: 28px; height: 28px; flex: none; border-radius: 8px; background: var(--press); color: var(--ink-2); }
+.upto-ico svg { width: 15px; height: 15px; }
+.upto-text { display: grid; gap: 1px; flex: 1; min-width: 0; }
+.upto-text b { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.upto-text small { font-size: 12px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.upto-check { width: 16px; height: 16px; flex: none; color: var(--accent); }
+.upto-input, .upto-search input { width: 100%; height: 38px; padding: 0 12px; border: 0; border-radius: 10px; font: inherit; font-size: 14px; color: var(--ink); background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--line); }
+.upto-input:focus, .upto-search input:focus { outline: none; box-shadow: inset 0 0 0 2px var(--accent); }
+.upto-search { position: relative; display: block; }
+.upto-search svg { position: absolute; left: 11px; top: 11px; width: 16px; height: 16px; color: var(--ink-3); pointer-events: none; }
+.upto-search input { padding-left: 34px; }
+.upto-empty { padding: 18px 8px; text-align: center; font-size: 13px; }
+.upto-sub { display: grid; gap: 10px; padding: 12px; border-radius: var(--r); background: var(--surface-2); }
+.upto-sub .seg { width: 100%; }
+.upto-sub .upto-input { background: var(--surface); }
+.upto-sub-label { font-size: 12px; font-weight: 600; color: var(--ink-2); }
+.upto-where { display: flex; align-items: center; gap: 6px; margin-right: auto; min-width: 0; font-size: 12.5px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.upto-where svg { width: 14px; height: 14px; flex: none; }
+.drop-overlay span { display: block; margin-top: 2px; font-size: 13px; opacity: 0.75; }
