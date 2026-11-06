@@ -529,7 +529,7 @@ section { margin-bottom: 28px; }
 .toast svg { width: 16px; height: 16px; color: #30d158; }
 .toast.err { background: rgba(215, 0, 21, 0.94); }
 .toast button { border: 0; background: none; color: #64d2ff; font-weight: 650; padding: 0 0 0 6px; }
-.tray { position: fixed; right: 20px; bottom: 20px; z-index: 110; width: 340px; border-radius: 16px; background: var(--glass); -webkit-backdrop-filter: saturate(180%) blur(30px); backdrop-filter: saturate(180%) blur(30px); box-shadow: var(--shadow-pop); animation: pop var(--t-slow) var(--spring); overflow: hidden; }
+.tray { position: fixed; right: 20px; bottom: 20px; isolation: isolate; z-index: 110; width: 340px; border-radius: 16px; background: var(--glass); -webkit-backdrop-filter: saturate(180%) blur(30px); backdrop-filter: saturate(180%) blur(30px); box-shadow: var(--shadow-pop); animation: pop var(--t-slow) var(--spring); overflow: hidden; }
 .tray header { display: flex; align-items: center; gap: 12px; padding: 12px 10px 12px 14px; cursor: pointer; }
 .tray header > div:nth-child(2) { flex: 1; display: flex; flex-direction: column; }
 .tray header strong { font-size: 13.5px; }
@@ -537,6 +537,16 @@ section { margin-bottom: 28px; }
 .tray-ring { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: conic-gradient(var(--accent) var(--p), var(--press) 0); -webkit-mask: radial-gradient(circle, transparent 10px, #000 10.5px); mask: radial-gradient(circle, transparent 10px, #000 10.5px); color: var(--ok); }
 .tray-ring:has(svg) { -webkit-mask: none; mask: none; background: color-mix(in srgb, var(--ok) 16%, transparent); }
 .tray-ring svg { width: 16px; height: 16px; stroke-width: 2.4; }
+/* done: a thin bar runs down for a few seconds (paused while the pointer is on the panel), then it slides away */
+.tray-countdown { position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: color-mix(in srgb, var(--ok) 70%, transparent); transform-origin: left; animation: tray-count 4s linear forwards; }
+.tray:hover .tray-countdown { animation-play-state: paused; }
+@keyframes tray-count { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+.tray.leaving { animation: tray-out 0.5s var(--spring) forwards; pointer-events: none; }
+@keyframes tray-out {
+  0% { opacity: 1; transform: none; filter: none; }
+  100% { opacity: 0; transform: translateY(18px) scale(0.94); filter: blur(4px); }
+}
+@media (prefers-reduced-motion: reduce) { .tray.leaving { animation-duration: 0.15s; } }
 .tray ul { list-style: none; margin: 0; padding: 0 14px 12px; max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 9px; }
 .tray li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; font-size: 12.5px; }
 .tray-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1349,3 +1359,10 @@ body.is-moving .folder:not(.drop-on) { box-shadow: inset 0 0 0 1.5px color-mix(i
 .upto-where { display: flex; align-items: center; gap: 6px; margin-right: auto; min-width: 0; font-size: 12.5px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .upto-where svg { width: 14px; height: 14px; flex: none; }
 .drop-overlay span { display: block; margin-top: 2px; font-size: 13px; opacity: 0.75; }
+
+/* ---------------- remove a client ---------------- */
+.remove-client { display: grid; gap: 14px; }
+.remove-client > p { margin: 0; font-size: 13.5px; }
+.remove-client .backup-switch small { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.remove-client .backup-switch small svg { width: 13px; height: 13px; }
+.remove-client-note { font-size: 12px !important; color: var(--ink-3); }

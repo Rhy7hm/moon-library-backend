@@ -271,20 +271,7 @@ export function ClientPage({ id }: { id: string }) {
       {editing && <ClientDialog client={c} tab={editing} onClose={() => setEditing(false)} />}
       {making && <ClientFolderDialog c={c} onClose={() => setMaking(false)} />}
       {adding && <SharePicker client={c} onClose={() => setAdding(false)} />}
-      {deleting && (
-        <ConfirmDialog
-          title={`Move ${c.name} to the Trash?`}
-          text="Their website logins stop working straight away. You can restore them from the Trash for 90 days, with everything they had shared. Their folders and files stay in the library."
-          action="Move to Trash"
-          danger
-          onClose={() => setDeleting(false)}
-          onConfirm={async () => {
-            setDeleting(false);
-            const undo = () => op('restore', { folderIds: [], itemIds: [], clientIds: [c.id] });
-            if (await s.run('clients.delete', { id: c.id }, `Moved ${c.name} to the Trash`, undo)) s.go({ page: 'clients' });
-          }}
-        />
-      )}
+      {deleting && <RemoveClientDialog c={c} onClose={() => setDeleting(false)} />}
     </>
   } />;
 }
@@ -704,6 +691,60 @@ function SharedFolder({ f, share, note, menu }: { f: Folder | undefined; share?:
       </div>
       {menu && menu.length > 0 && <MenuButton items={menu} label={`More for ${nameOf(f)}`} />}
     </div>
+  );
+}
+
+/* ---------------- remove a client (to the Trash) ---------------- */
+
+function RemoveClientDialog({ c, onClose }: { c: Client; onClose: () => void }) {
+  const s = useStore();
+  const home = c.homeFolderId ? s.byId.get(c.homeFolderId) : undefined;
+  const live = !!home && !home.deletedAt && !s.path(home.id).some((x) => x.deletedAt);
+  const count = (id: string): number => s.assetsIn(id).length + s.children(id).reduce((n, k) => n + count(k.id), 0);
+  const files = live ? count(home.id) : 0;
+  const [withFolder, setWithFolder] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const go = async () => {
+    setBusy(true);
+    const folderToo = live && withFolder;
+    const undo = () => op('restore', { folderIds: [], itemIds: [], clientIds: [c.id] });
+    const ok = await s.run('clients.delete', { id: c.id, withFolder: folderToo }, folderToo ? `Moved ${c.name} and their folder to the Trash` : `Moved ${c.name} to the Trash`, undo);
+    setBusy(false);
+    onClose();
+    if (ok) s.go({ page: 'clients' });
+  };
+  return (
+    <Dialog
+      title={`Move ${c.name} to the Trash?`}
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button kind="danger" icon={<ITrash />} onClick={go} disabled={busy}>
+            Move to Trash
+          </Button>
+        </>
+      }
+    >
+      <div className="remove-client">
+        <p className="muted">Their website logins stop working straight away. Restore them from the Trash within 90 days and everything comes back as it was.</p>
+        {live && (
+          <label className="backup-switch">
+            <span>
+              <strong>Also move their folder to the Trash</strong>
+              <small className="muted">
+                <IFolder /> {s.path(home.id).map(nameOf).join(' › ')} · {files === 1 ? '1 file' : `${files} files`}
+                {!withFolder && ' — stays in the Library'}
+              </small>
+            </span>
+            <input type="checkbox" role="switch" className="switch" checked={withFolder} onChange={(e) => setWithFolder(e.target.checked)} />
+          </label>
+        )}
+        <p className="remove-client-note">Folders elsewhere that were only shared with {c.name} aren't touched.</p>
+      </div>
+    </Dialog>
   );
 }
 

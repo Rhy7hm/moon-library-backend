@@ -179,8 +179,15 @@ export function TrashPage() {
     s.toast('Deleted for good', { tone: 'ok' });
     await s.reload();
   };
+  const homeOf = (c: Client) => {
+    const f = c.homeFolderId ? s.byId.get(c.homeFolderId) : undefined;
+    return f && f.deletedAt === c.deletedAt ? f : undefined;
+  };
+  const bundled = new Set(s.trashClients.flatMap((c) => (homeOf(c) ? [homeOf(c)!.id] : [])));
+  const filesIn = (id: string): number => (s.tree?.items ?? []).filter((a) => a.folderId === id).length + s.folders.concat(s.trashFolders).filter((f) => f.parentId === id).reduce((n, f) => n + filesIn(f.id), 0);
   const rows: { key: string; at: number; folder: Folder | null; asset: Asset | null; client: Client | null }[] = [
-    ...s.trashFolders.map((f) => ({ key: 'f' + f.id, at: f.deletedAt!, folder: f, asset: null, client: null })),
+    // a client's own folder that went to the Trash with them is shown as part of the client
+    ...s.trashFolders.filter((f) => !bundled.has(f.id)).map((f) => ({ key: 'f' + f.id, at: f.deletedAt!, folder: f, asset: null, client: null })),
     ...s.trashAssets.map((a) => ({ key: 'i' + a.id, at: a.deletedAt!, folder: null, asset: a, client: null })),
     ...s.trashClients.map((c) => ({ key: 'c' + c.id, at: c.deletedAt!, folder: null, asset: null, client: c })),
   ].sort((a, b) => b.at - a.at);
@@ -199,7 +206,11 @@ export function TrashPage() {
   const nameRow = (r: (typeof rows)[number]) => (r.asset ? titleOf(r.asset) : r.client ? r.client.name : nameOf(r.folder!));
   const thumbRow = (r: (typeof rows)[number]) => (r.asset ? <Thumb asset={r.asset} /> : r.client ? <ClientAvatar c={r.client} size={40} /> : <FolderGlyph f={r.folder!} />);
   const kindRow = (r: (typeof rows)[number]) =>
-    r.asset ? KIND[typeOf(mainFile(r.asset))] : r.client ? `Client · ${r.client.logins.length} ${r.client.logins.length === 1 ? 'login' : 'logins'} · ${r.client.shares.length} shared` : 'Folder';
+    r.asset
+      ? KIND[typeOf(mainFile(r.asset))]
+      : r.client
+        ? `Client${homeOf(r.client) ? ` + their folder (${filesIn(homeOf(r.client)!.id)} files)` : ''} · ${r.client.logins.length} ${r.client.logins.length === 1 ? 'login' : 'logins'}`
+        : 'Folder';
 
   // newest first, in three groups
   const day = 864e5;
@@ -277,7 +288,7 @@ export function TrashPage() {
                                 ...ids([r]),
                                 item: {
                                   title: nameRow(r),
-                                  meta: r.asset ? `${KIND[typeOf(mainFile(r.asset))]} · ${fmtSize(sizeOf(r))}` : r.client ? 'Client, logins and share list — their files stay in the library' : 'Folder and everything in it',
+                                  meta: r.asset ? `${KIND[typeOf(mainFile(r.asset))]} · ${fmtSize(sizeOf(r))}` : r.client ? (homeOf(r.client) ? `Client, logins, share list and their folder (${filesIn(homeOf(r.client)!.id)} files)` : 'Client, logins and share list — their files stay in the library') : 'Folder and everything in it',
                                   thumb: thumbRow(r),
                                 },
                               })

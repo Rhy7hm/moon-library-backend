@@ -24,7 +24,7 @@ def test_trash_signs_them_out_and_restore_brings_it_all_back(owner, app):
     r = op(owner, "clients.create", {"name": "Acme"}, status=409)
     assert "Trash" in r["error"]
     log = op(owner, "audit.list", {"kind": "content"})["entries"]
-    assert log[0]["summary"] == "Deleted (moved to Trash) 👤 Acme" and log[0]["undoable"]
+    assert log[0]["summary"] == "Deleted (moved to Trash) 👤 Acme and their folder" and log[0]["undoable"]
 
     op(owner, "restore", {"clientIds": [cid]})
     back = client(owner, cid)
@@ -62,3 +62,39 @@ def test_empty_trash_and_the_90_day_clean_up(owner, app):
     with app.app_context():
         assert cleanup(force=True)["clients"] == 1
     assert op(owner, "clients.list")["clients"] == []
+
+
+def test_their_folder_goes_with_them_and_comes_back(owner, app):
+    from tests.conftest import item, upload
+
+    cid, _, _ = setup_client(owner)
+    home = client(owner, cid)["homeFolderId"]
+    card = item(owner, home, "Logo")
+    upload(owner, card, "logo.png", b"\x89PNG\r\n\x1a\n" + b"l" * 200)
+    elsewhere = folder(owner, "Campaign")  # only shared with them: never touched
+    op(owner, "shares.add", {"clientId": cid, "folderIds": [elsewhere]})
+
+    assert op(owner, "clients.delete", {"id": cid})["withFolder"] is True
+    folders = {f["id"]: f for f in owner.get("/api/admin/tree").get_json()["folders"]}
+    assert folders[home]["deletedAt"] and not folders[elsewhere]["deletedAt"]
+    log = op(owner, "audit.list", {"kind": "content"})["entries"]
+    assert log[0]["summary"] == "Deleted (moved to Trash) 👤 Acme and their folder"
+
+    op(owner, "restore", {"clientIds": [cid]})  # one restore brings both back
+    folders = {f["id"]: f for f in owner.get("/api/admin/tree").get_json()["folders"]}
+    assert not folders[home]["deletedAt"] and client(owner, cid)["deletedAt"] is None
+
+    op(owner, "clients.delete", {"id": cid})
+    op(owner, "purge", {"clientIds": [cid]})  # and Delete now removes both, files included
+    t = owner.get("/api/admin/tree").get_json()
+    assert home not in {f["id"] for f in t["folders"]} and card not in {i["id"] for i in t["items"]}
+    assert elsewhere in {f["id"] for f in t["folders"]}
+
+
+def test_keep_their_folder(owner):
+    cid, _, _ = setup_client(owner)
+    home = client(owner, cid)["homeFolderId"]
+    assert op(owner, "clients.delete", {"id": cid, "withFolder": False})["withFolder"] is False
+    op(owner, "purge", {"clientIds": [cid]})
+    f = next(x for x in owner.get("/api/admin/tree").get_json()["folders"] if x["id"] == home)
+    assert not f["deletedAt"]  # still in the Library

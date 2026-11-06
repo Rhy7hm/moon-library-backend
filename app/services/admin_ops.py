@@ -975,6 +975,20 @@ def purge_clients(ids: list[str]) -> int:
     return len(found)
 
 
+def bundled_folders(client_ids: list[str]) -> list[str]:
+    """Clients' own folders (Clients › <client>) that went to the Trash together with them (same moment)."""
+    if not client_ids:
+        return []
+    return [
+        r["id"]
+        for r in q.all(
+            f"""SELECT f.id FROM clients c JOIN folders f ON f.id = c.home_folder_id
+                 WHERE c.deleted_at IS NOT NULL AND f.deleted_at = c.deleted_at AND c.id IN ({in_list(len(client_ids))})""",
+            *client_ids,
+        )
+    ]
+
+
 def trash(ctx: Ctx, b: Body):
     folder_ids = _ids(b.get("folderIds"))
     item_ids = _ids(b.get("itemIds"))
@@ -993,6 +1007,7 @@ def restore(ctx: Ctx, b: Body):
     folder_ids = _ids(b.get("folderIds"))
     item_ids = _ids(b.get("itemIds"))
     client_ids = _ids(b.get("clientIds"))
+    folder_ids = list(dict.fromkeys([*folder_ids, *bundled_folders(client_ids)]))  # a client comes back with their folder
     stmts = [(f"UPDATE clients SET deleted_at = NULL WHERE id IN ({in_list(len(client_ids))})", client_ids)] if client_ids else []
     if folder_ids:
         stmts.append((f"UPDATE folders SET deleted_at = NULL WHERE id IN ({in_list(len(folder_ids))})", folder_ids))
@@ -1016,6 +1031,7 @@ def purge(ctx: Ctx, b: Body):
             binned = {r["id"] for r in q.all(f"SELECT id FROM clients WHERE deleted_at IS NOT NULL AND id IN ({in_list(len(client_ids))})", *client_ids)}
             if set(client_ids) - binned:
                 raise HttpError(400, "Only clients in the Trash can be deleted for good. Remove the client first.")
+            folder_ids = list(dict.fromkeys([*folder_ids, *bundled_folders(client_ids)]))  # with their folder, if it went with them
         # only what's already in the Trash can be deleted for good: a folder that was trashed, or a
         # file that was trashed itself or sits inside a trashed folder
         if folder_ids:

@@ -406,15 +406,46 @@ export function Toasts() {
   );
 }
 
+const HIDE_AFTER = 4000;
+
+/**
+ * The uploads panel. Once everything is done it waits a few seconds (a thin bar runs down; hovering
+ * pauses it), then slides away by itself. Failed uploads keep it open so they can be seen.
+ */
 export function UploadTray() {
   const { uploads, clearUploads } = useStore();
   const [open, setOpen] = useState(true);
-  if (!uploads.length) return null;
+  const [leaving, setLeaving] = useState(false);
+  const [hover, setHover] = useState(false);
   const busy = uploads.filter((u) => u.state === 'working' || u.state === 'waiting').length;
   const failed = uploads.filter((u) => u.state === 'failed').length;
+  const autoHide = uploads.length > 0 && !busy && !failed;
+  const batch = uploads.map((u) => u.id).join();
+  // all done: leave after a few seconds (the time left is kept while the pointer is on the panel)
+  const left = useRef(HIDE_AFTER);
+  useEffect(() => {
+    left.current = HIDE_AFTER;
+  }, [batch]);
+  useEffect(() => {
+    if (busy) setLeaving(false); // new files started while it was leaving
+    if (!autoHide || hover || leaving) return;
+    const start = Date.now();
+    const t = setTimeout(() => setLeaving(true), left.current);
+    return () => {
+      clearTimeout(t);
+      left.current = Math.max(0, left.current - (Date.now() - start));
+    };
+  }, [autoHide, hover, leaving, busy, batch]);
+  // the slide-away takes half a second, then the list is cleared
+  useEffect(() => {
+    if (!leaving) return;
+    const t = setTimeout(() => (setLeaving(false), clearUploads()), 500);
+    return () => clearTimeout(t);
+  }, [leaving, clearUploads]);
+  if (!uploads.length) return null;
   const pct = Math.round(uploads.reduce((n, u) => n + u.pct, 0) / uploads.length);
   return (
-    <div className="tray">
+    <div className={`tray${leaving ? ' leaving' : ''}`} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
       <header onClick={() => setOpen((v) => !v)}>
         <div className="tray-ring" style={{ ['--p' as string]: `${busy ? pct : 100}%` }}>{busy ? '' : <ICheck />}</div>
         <div>
@@ -422,7 +453,7 @@ export function UploadTray() {
           <small>{busy ? `${pct}%` : `${uploads.length - failed} of ${uploads.length} done`}</small>
         </div>
         {!busy && (
-          <button className="icon-btn" aria-label="Close" onClick={(e) => (e.stopPropagation(), clearUploads())}>
+          <button className="icon-btn" aria-label="Close" onClick={(e) => (e.stopPropagation(), setLeaving(true))}>
             <IX />
           </button>
         )}
@@ -442,6 +473,8 @@ export function UploadTray() {
           ))}
         </ul>
       )}
+      {/* the time left, as a thin bar running down */}
+      {autoHide && !leaving && <span className="tray-countdown" key={batch} style={{ animationDuration: `${HIDE_AFTER}ms` }} />}
     </div>
   );
 }

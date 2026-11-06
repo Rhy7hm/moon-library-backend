@@ -21,8 +21,9 @@ Removing a share never deletes the file. Permanently deleting a file or folder r
   clients.update     { id, name?, email?, notes?, color? }        (Editor)
   clients.setAvatar  { id, data }  JPEG/PNG/WEBP as base64 → { avatarKey }  (Editor)
   clients.clearAvatar { id }                                       (Editor)
-  clients.delete     { id }  moves the client to the Trash: logins stop working, shares are kept for a restore,
-                     the home folder and files stay; restore / delete for good from the Trash   (Owner)
+  clients.delete     { id, withFolder? = true }  moves the client to the Trash: logins stop working, shares are
+                     kept for a restore; with their folder (Clients › <client>) too, unless withFolder is false.
+                     Restore / delete for good from the Trash handle the client and that folder together   (Owner)
   clients.newFolder  { clientId, name, share? = true } → { id }   a folder in the client's home folder (Editor)
   clients.home       { clientId } → { id }   the client's home folder, made if it's missing (Editor)
   shares.add         { clientId, folderIds?, itemIds?, links?: [{ url, title }], expiresAt? } → { added, skipped }
@@ -277,12 +278,20 @@ def clients_clear_avatar(user: SessionUser, b: dict):
 
 def clients_delete(user: SessionUser, b: dict):
     c = _client(b.get("id"))
-    q.batch(admin_ops._trash_clients([c["id"]], now()))
+    t = now()
+    stmts = admin_ops._trash_clients([c["id"]], t)
+    home = q.first("SELECT home_folder_id FROM clients WHERE id = ?", c["id"])["home_folder_id"]
+    # their folder goes with them (the same moment links the two, so they come back or go for good together)
+    with_folder = b.get("withFolder", True) is not False and home and _live(home)
+    if with_folder:
+        stmts.append(("UPDATE folders SET deleted_at = ? WHERE id = ?", [t, home]))
+    q.batch(stmts)
     write_log(user, {
-        "kind": "content", "action": "trash", "summary": f"Deleted (moved to Trash) 👤 {c['name']}", "targetType": "client", "targetIds": [c["id"]],
-        "before": {"folderIds": [], "itemIds": [], "clientIds": [c["id"]]},
+        "kind": "content", "action": "trash", "targetType": "client", "targetIds": [c["id"]],
+        "summary": f"Deleted (moved to Trash) 👤 {c['name']}" + (" and their folder" if with_folder else ""),
+        "before": {"folderIds": [home] if with_folder else [], "itemIds": [], "clientIds": [c["id"]]},
     })
-    return {"ok": True}
+    return {"ok": True, "withFolder": bool(with_folder)}
 
 
 def _clean_url(v) -> str:
