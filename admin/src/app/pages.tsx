@@ -1,8 +1,8 @@
 /* Home, Trash, Insights, Activity, Team and Settings. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { assetSize, errText, mainFile, nameOf, op, titleOf, type Asset, type Client, type Folder, type Role } from './api';
+import { assetSize, errText, mainFile, nameOf, op, roleLabel, titleOf, type Asset, type Client, type Folder, type Role } from './api';
 import { fmtAgo, fmtDate, fmtSize, greeting, typeOf } from './format';
-import { IChevD, IDoc, IImage, IKey, ILock, IPen, IPlus, IPulse, IRestore, ITrash, IUnlock, IUpload, IVideo } from './icons';
+import { IChevD, IDoc, IImage, IKey, ILock, IPen, IPlus, IPulse, IRestore, ISparkles, ITrash, IUnlock, IUpload, IVideo } from './icons';
 import { ClientAvatar } from './clients';
 import { shatter } from './shatter';
 import { ShredDialog, type ShredItem } from './shredder';
@@ -474,7 +474,7 @@ export function ActivityPage() {
             onChange={setKind}
             options={[
               { value: 'content', label: 'Files' },
-              { value: 'security', label: 'Sign-ins' },
+              ...(s.powers.securityLog ? [{ value: 'security' as const, label: 'Sign-ins' }] : []),
             ]}
           />
         }
@@ -516,14 +516,15 @@ export function ActivityPage() {
 /* ---------------- Team ---------------- */
 
 type User = { id: string; username: string; name: string; role: Role; disabled: number; last_login_at: number | null; sessions: number; avatarKey?: string | null };
-const ROLE_INFO: Record<Role, string> = { owner: 'Everything, including the team, Trash and settings', editor: 'Upload, organise, share and delete', viewer: 'Browse and download only' };
-const ROLE_TEXT: Record<Role, string> = { owner: 'Owner — everything, including team and Trash', editor: 'Editor — upload, organise and delete', viewer: 'Viewer — browse and download only' };
+const ROLE_INFO: Record<Role, string> = { superadmin: 'Everything, plus managing Owners, deleting accounts, Drive and security', owner: 'Everything in the library, the Trash, clients and the team', editor: 'Upload, organise, share and delete', viewer: 'Browse and download only' };
+const ROLE_TEXT: Record<Role, string> = { superadmin: 'Super admin — everything, and only she can manage Owners', owner: 'Owner — everything, including team and Trash', editor: 'Editor — upload, organise and delete', viewer: 'Viewer — browse and download only' };
 
 export function TeamPage() {
   const s = useStore();
   const [users, setUsers] = useState<User[] | null>(null);
   const [adding, setAdding] = useState(false);
   const [made, setMade] = useState<{ username: string; password: string } | null>(null);
+  const [deleting, setDeleting] = useState<User | null>(null);
   const load = () => op<{ users: User[] }>('users.list', {}).then((r) => setUsers(r.users), (e) => s.toast(errText(e), { tone: 'err' }));
   useEffect(() => {
     load();
@@ -550,7 +551,9 @@ export function TeamPage() {
             .sort((a, b) => Number(!!a.disabled) - Number(!!b.disabled) || Number(b.id === s.me.id) - Number(a.id === s.me.id))
             .map((u) => {
               const mine = u.id === s.me.id;
-              const manage = s.isOwner && !mine;
+              // a Super admin's account: only a Super admin; an Owner's: whoever has the manageOwners power
+              const manage = s.isOwner && !mine && (u.role === 'superadmin' ? s.powers.super : u.role === 'owner' ? s.powers.manageOwners : true);
+              const roleEditable = manage && u.role !== 'superadmin';
               const menu: MenuItem[] = [
                 {
                   label: 'Reset password',
@@ -570,9 +573,10 @@ export function TeamPage() {
                     if (await s.run('users.update', { id: u.id, disabled: off }, off ? `${u.name} is signed out and can't sign in` : `${u.name} can sign in again`)) load();
                   },
                 },
+                ...(s.powers.deleteUsers ? (['sep', { label: 'Delete account…', icon: <ITrash />, danger: true, onClick: () => setDeleting(u) }] as MenuItem[]) : []),
               ];
               return (
-                <div className={`list-row team-row${u.disabled ? ' is-off' : ''}`} key={u.id}>
+                <div className={`list-row team-row${u.disabled ? ' is-off' : ''}${u.role === 'superadmin' ? ' is-super' : ''}`} key={u.id}>
                   <UserAvatar user={u} />
                   <span className="list-text">
                     <strong>
@@ -584,17 +588,20 @@ export function TeamPage() {
                       @{u.username} · {u.last_login_at ? `last signed in ${fmtAgo(u.last_login_at)}` : 'never signed in'}
                     </small>
                   </span>
-                  {manage ? (
+                  {roleEditable ? (
                     <label className="role-select">
                       <select value={u.role} aria-label={`Role for ${u.name}`} onChange={(e) => s.run('users.update', { id: u.id, role: e.target.value }, 'Role changed').then(load)}>
-                        <option value="owner">Owner</option>
+                        {s.powers.manageOwners && <option value="owner">Owner</option>}
                         <option value="editor">Editor</option>
                         <option value="viewer">Viewer</option>
                       </select>
                       <IChevD />
                     </label>
                   ) : (
-                    <span className="role-pill">{u.role[0].toUpperCase() + u.role.slice(1)}</span>
+                    <span className={`role-pill${u.role === 'superadmin' ? ' super' : ''}`}>
+                      {u.role === 'superadmin' && <ISparkles />}
+                      {roleLabel(u.role)}
+                    </span>
                   )}
                   {manage ? <MenuButton items={menu} label={`More for ${u.name}`} /> : <span className="team-menu-gap" />}
                 </div>
@@ -602,14 +609,28 @@ export function TeamPage() {
             })}
         </div>
       )}
-      <div className="role-cards">
-        {(Object.keys(ROLE_INFO) as Role[]).map((r) => (
+      <div className={`role-cards${users?.some((u) => u.role === 'superadmin') ? ' four' : ''}`}>
+        {(Object.keys(ROLE_INFO) as Role[]).filter((r) => r !== 'superadmin' || users?.some((u) => u.role === 'superadmin')).map((r) => (
           <div key={r}>
-            <b>{r[0].toUpperCase() + r.slice(1)}</b>
+            <b>{roleLabel(r)}</b>
             <span>{ROLE_INFO[r]}</span>
           </div>
         ))}
       </div>
+      {deleting && (
+        <ConfirmDialog
+          title={`Delete ${deleting.name}'s account?`}
+          text={`@${deleting.username} is signed out and can never sign in again. Their uploads and history stay. To pause someone instead, use Turn off.`}
+          action="Delete account"
+          danger
+          onClose={() => setDeleting(null)}
+          onConfirm={async () => {
+            const u = deleting;
+            setDeleting(null);
+            if (await s.run('users.delete', { id: u.id }, `Deleted ${u.name}'s account`)) load();
+          }}
+        />
+      )}
       {adding && (
         <AddPerson
           onClose={() => setAdding(false)}
@@ -657,6 +678,7 @@ export function TeamPage() {
 }
 
 function AddPerson({ onClose, onAdd }: { onClose: () => void; onAdd: (b: { name: string; username: string; role: Role }) => void }) {
+  const s = useStore();
   const [name, setName] = useState('');
   const [username, setUsername] = useState('');
   const [role, setRole] = useState<Role>('editor');
@@ -688,7 +710,7 @@ function AddPerson({ onClose, onAdd }: { onClose: () => void; onAdd: (b: { name:
         <select className="select" value={role} onChange={(e) => setRole(e.target.value as Role)}>
           <option value="editor">Editor</option>
           <option value="viewer">Viewer</option>
-          <option value="owner">Owner</option>
+          {s.powers.manageOwners && <option value="owner">Owner</option>}
         </select>
         <small>{ROLE_TEXT[role]}</small>
       </label>

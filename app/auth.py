@@ -27,8 +27,9 @@ from .util import HttpError, new_id, now
 
 log = logging.getLogger(__name__)
 
-ROLES = ["owner", "editor", "viewer"]
-_RANK = {"viewer": 1, "editor": 2, "owner": 3}
+ROLES = ["superadmin", "owner", "editor", "viewer"]
+ASSIGNABLE = ["owner", "editor", "viewer"]  # what the Team page can give; a Super admin is made on the server only
+_RANK = {"viewer": 1, "editor": 2, "owner": 3, "superadmin": 4}
 
 IDLE_MS = 12 * 3600_000
 MAX_MS = 14 * 24 * 3600_000
@@ -43,6 +44,31 @@ def _cookie() -> str:
 
 def at_least(have: str, need: str) -> bool:
     return _RANK.get(have, 0) >= _RANK[need]
+
+
+# ---------------------------------------------------------------- Super admin
+# The Super admin has everything an Owner has, plus powers kept for her alone:
+#   manageOwners  make, demote, turn off, reset or sign out Owners (Owners manage Editors and Viewers)
+#   deleteUsers   delete accounts (everyone else can only turn people off)
+#   settings      connect / disconnect Google Drive, backup and security settings
+#   securityLog   the security log (sign-ins, accounts, settings)
+# and her account is protected: only a Super admin can change it. Until a Super admin exists, Owners
+# keep all of these, so nothing is locked away on a library that doesn't have one yet.
+POWERS = ("manageOwners", "deleteUsers", "settings", "securityLog")
+
+
+def has_super() -> bool:
+    return bool(q.first("SELECT id FROM users WHERE role = 'superadmin' AND disabled = 0 LIMIT 1"))
+
+
+def powers(role: str) -> dict:
+    full = role == "superadmin" or (role == "owner" and not has_super())
+    return {"super": role == "superadmin", **{p: full for p in POWERS}}
+
+
+def require_power(user, name: str) -> None:
+    if not powers(user.role)[name]:
+        raise HttpError(403, "Only the Super admin can do this.")
 
 
 @dataclass

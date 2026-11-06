@@ -90,6 +90,7 @@ Updates: `git pull` → `pip install -r requirements.txt` → `flask --app wsgi 
 
 ```bash
 .venv/bin/flask --app wsgi create-owner     # create an Owner from the terminal
+.venv/bin/flask --app wsgi create-superadmin   # create the Super admin (or --promote <ID> to make an existing account her)
 .venv/bin/flask --app wsgi cleanup          # empty Trash / old versions older than 90 days now
 .venv/bin/flask --app wsgi db upgrade       # update the tables after an update
 ```

@@ -20,7 +20,7 @@ import tempfile
 
 from flask import Blueprint, Response, current_app, redirect, request
 
-from ..auth import check_origin, get_user, require_user, write_log
+from ..auth import check_origin, get_user, powers, require_power, require_user, write_log
 from ..services import activity
 from ..services.admin_ops import OPS, Ctx, check_key, http_meta, loose_folder_id
 from ..services.library import load_library
@@ -47,7 +47,7 @@ def admin_get(op: str):
     except Exception:  # noqa: BLE001
         log.exception("cleanup")
     data = load_library(asset_base=current_app.config["ASSET_BASE"])
-    data["user"] = {"id": user.id, "username": user.username, "name": user.name, "role": user.role, "pins": pins_of(user.id)}
+    data["user"] = {"id": user.id, "username": user.username, "name": user.name, "role": user.role, "pins": pins_of(user.id), "powers": powers(user.role)}
     data["looseFolderId"] = loose_folder_id()  # "Unsorted": shown as files at the top of the Library
     return json_response(data, headers={"Cache-Control": "no-store"})
 
@@ -182,6 +182,7 @@ def backup_now_route():
 def backup_settings_route():
     check_origin()
     user = require_user("owner")
+    require_power(user, "settings")
     from ..drive.backup import backup_status, set_mirror_deletes
 
     b = request.get_json(silent=True, force=True) or {}
@@ -216,8 +217,8 @@ def drive_connect_route():
     from ..drive.connect import ConnectError, start
 
     user = get_user()
-    if not user or user.role != "owner":
-        return _drive_page("Only an Owner can connect Google Drive. Sign in as an Owner and try again.")
+    if not user or not (user.role in ("owner", "superadmin") and powers(user.role)["settings"]):
+        return _drive_page("Only the Super admin (or an Owner, when there's no Super admin) can connect Google Drive.")
     try:
         return redirect(start(user.id), code=302)
     except ConnectError as e:
@@ -229,8 +230,8 @@ def drive_callback_route():
     from ..drive.connect import ConnectError, finish
 
     user = get_user()
-    if not user or user.role != "owner":
-        return _drive_page("Only an Owner can connect Google Drive. Sign in as an Owner and try again.")
+    if not user or not (user.role in ("owner", "superadmin") and powers(user.role)["settings"]):
+        return _drive_page("Only the Super admin (or an Owner, when there's no Super admin) can connect Google Drive.")
     if request.args.get("error"):
         why = "you chose not to allow it" if request.args["error"] == "access_denied" else request.args["error"]
         return _drive_page(f"Google didn't give access ({why}). Nothing was changed.")
@@ -246,6 +247,7 @@ def drive_callback_route():
 def drive_disconnect_route():
     check_origin()
     user = require_user("owner")
+    require_power(user, "settings")
     from ..drive.connect import disconnect
 
     conn = disconnect()

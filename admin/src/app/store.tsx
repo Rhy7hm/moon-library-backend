@@ -4,7 +4,7 @@
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createItem, guessMime, kindOf, onSignedOut, uploadVersion } from '@/lib/upload-client';
-import { errText, loadClients, loadTree, op, type Asset, type Client, type Folder, type Me, type Tag, type Tree } from './api';
+import { errText, loadClients, loadTree, op, type Asset, type Client, type Folder, type Me, type Powers, type Tag, type Tree } from './api';
 import { deriveAudio, deriveImage, deriveVideo } from './derive/derive';
 import { deriveDesign, isDesignFile } from './derive/derive-design';
 
@@ -98,6 +98,8 @@ type Store = {
   run: <T>(name: string, body: unknown, done?: string, undo?: () => Promise<unknown>) => Promise<T | null>;
   canEdit: boolean;
   isOwner: boolean;
+  /** the Super admin's powers (an Owner has them too while there's no Super admin) */
+  powers: Powers;
   /** folders this person pinned to their sidebar, in their order (saved on the server, per person) */
   pins: string[];
   setPins: (ids: string[]) => void;
@@ -367,7 +369,8 @@ export function StoreProvider({ me: meProp, onSignOut, children }: { me: Me; onS
     clearUploads: () => setUploads((u) => u.filter((j) => j.state === 'working' || j.state === 'waiting')),
     run,
     canEdit: me.role !== 'viewer',
-    isOwner: me.role === 'owner',
+    isOwner: me.role === 'owner' || me.role === 'superadmin',
+    powers: tree?.user.powers ?? me.powers ?? { super: false, manageOwners: false, deleteUsers: false, settings: false, securityLog: false },
     // a pinned folder that's in Trash (or inside one that is) drops out until it's restored
     pins: pins.filter((id) => derived.byId.has(id) && !derived.path(id).some((f) => f.deletedAt)),
     setPins,

@@ -14,6 +14,7 @@ import {
   errText,
   revokeOtherSessions,
   revokeSession,
+  roleLabel,
   sessions as loadSessions,
   setMyAvatar,
   type BackupResult,
@@ -31,11 +32,11 @@ export type SettingsTab = 'account' | 'appearance' | 'devices' | 'connections';
 
 export function SettingsPage({ tab: asked }: { tab: SettingsTab }) {
   const s = useStore();
-  const owner = s.me.role === 'owner';
+  const owner = s.isOwner;
   const tab = asked === 'connections' && !owner ? 'account' : asked;
   return (
     <div className="page narrow">
-      <PageHeader title="Settings" sub={`Signed in as ${s.me.name} (@${s.me.username}) · ${s.me.role[0].toUpperCase() + s.me.role.slice(1)}`} />
+      <PageHeader title="Settings" sub={`Signed in as ${s.me.name} (@${s.me.username}) · ${roleLabel(s.me.role)}`} />
       <div className="settings-tabs">
         <Segmented
           label="Settings section"
@@ -251,7 +252,7 @@ function Account() {
           <div>
             <strong>{s.me.name}</strong>
             <p className="muted">
-              @{s.me.username} · {s.me.role[0].toUpperCase() + s.me.role.slice(1)}
+              @{s.me.username} · {roleLabel(s.me.role)}
             </p>
           </div>
         </div>
@@ -579,7 +580,8 @@ function BackupPanel() {
           role="switch"
           className="switch"
           checked={!!st.mirrorDeletes}
-          disabled={saving}
+          disabled={saving || !s.powers.settings}
+          title={s.powers.settings ? undefined : 'Only the Super admin can change this'}
           onChange={async (e) => {
             const on = e.target.checked;
             setSaving(true);
@@ -619,6 +621,16 @@ function DriveAccount({ c, onChange }: { c: Check; onChange: () => void }) {
   const s = useStore();
   const [asking, setAsking] = useState(false);
   if (!c.canConnect) return null;
+  if (!s.powers.settings) {
+    return (
+      <div className="drive-connect">
+        <div>
+          <strong>{c.connected ? `Connected as ${c.account}` : 'Google Drive isn’t connected'}</strong>
+          <small className="muted">Only the Super admin can connect or disconnect Google Drive.</small>
+        </div>
+      </div>
+    );
+  }
   const connect = () => (window.location.href = '/api/admin/drive/connect');
   if (!c.connected) {
     return (

@@ -8,7 +8,7 @@ import json
 import re
 from datetime import datetime, timezone
 
-from ..auth import ROLES, LOCK_AFTER, SessionUser, at_least, check_password_rules, hash_password, new_user_id, write_log
+from ..auth import ASSIGNABLE, LOCK_AFTER, SessionUser, at_least, check_password_rules, hash_password, new_user_id, powers, require_power, write_log
 from ..db import in_list, q, UPSERT_SETTING
 from ..util import HttpError, is_num, now
 from .activity import UNDOABLE, undo_entry
@@ -26,14 +26,25 @@ def _clean_id(v) -> str:
 
 
 def _role_of(v) -> str:
-    if isinstance(v, str) and v in ROLES:
+    if v == "superadmin":
+        raise HttpError(400, "A Super admin can only be made on the server (flask create-superadmin).")
+    if isinstance(v, str) and v in ASSIGNABLE:
         return v
     raise HttpError(400, "Unknown role")
 
 
 def _active_owners(except_id: str | None = None) -> int:
-    r = q.first("SELECT COUNT(*) AS n FROM users WHERE role = 'owner' AND disabled = 0 AND id != ?", except_id or "")
+    """Owners and Super admins who can still sign in (someone must always be able to run the library)."""
+    r = q.first("SELECT COUNT(*) AS n FROM users WHERE role IN ('owner', 'superadmin') AND disabled = 0 AND id != ?", except_id or "")
     return int((r or {}).get("n") or 0)
+
+
+def _guard(user: SessionUser, target_role: str) -> None:
+    """A Super admin's account can only be changed by a Super admin; an Owner's needs the manageOwners power."""
+    if target_role == "superadmin" and user.role != "superadmin":
+        raise HttpError(403, "Only a Super admin can change a Super admin's account.")
+    if target_role == "owner":
+        require_power(user, "manageOwners")
 
 
 def _dumps(v) -> str:
@@ -46,7 +57,7 @@ def users_list(user: SessionUser, b: dict):
     rows = q.all(
         """SELECT u.id, u.username, u.display_name AS name, u.role, u.disabled, u.locked_until, u.last_login_at, u.created_at, u.created_by, u.avatar_key AS avatarKey,
                   (SELECT COUNT(*) FROM sessions s WHERE s.user_id = u.id AND s.revoked_at IS NULL AND s.expires_at > ?) AS sessions
-             FROM users u ORDER BY u.role = 'owner' DESC, u.role = 'editor' DESC, u.display_name""",
+             FROM users u ORDER BY u.role = 'superadmin' DESC, u.role = 'owner' DESC, u.role = 'editor' DESC, u.display_name""",
         now(),
     )
     return {"users": rows}
@@ -60,6 +71,7 @@ def users_create(user: SessionUser, b: dict):
         raise HttpError(409, "That ID is already taken")
     name = b["name"].strip()[:60] if isinstance(b.get("name"), str) and b["name"].strip() else username
     role = _role_of(b.get("role"))
+    _guard(user, role)
     h = hash_password(check_password_rules(b.get("password")))
     uid = new_user_id()
     t = now()
@@ -76,6 +88,8 @@ def users_update(user: SessionUser, b: dict):
     u = q.first("SELECT id, username, display_name, role, disabled FROM users WHERE id = ?", uid)
     if not u:
         raise HttpError(404, "Account not found")
+    if u["id"] != user.id:
+        _guard(user, u["role"])
     sets, vals, said = [], [], []
     if isinstance(b.get("name"), str) and b["name"].strip() and b["name"].strip() != u["display_name"]:
         sets.append("display_name = ?")
@@ -84,6 +98,9 @@ def users_update(user: SessionUser, b: dict):
     if "role" in b:
         role = _role_of(b.get("role"))
         if role != u["role"]:
+            if u["role"] == "superadmin":
+                raise HttpError(400, "A Super admin's role can only be changed on the server.")
+            _guard(user, role)  # making someone an Owner needs the same power
             if u["role"] == "owner" and _active_owners(u["id"]) == 0:
                 raise HttpError(400, "There must always be at least one Owner")
             sets.append("role = ?")
@@ -113,9 +130,11 @@ def users_update(user: SessionUser, b: dict):
 
 def users_password(user: SessionUser, b: dict):
     uid = str(b.get("id") if b.get("id") is not None else "")
-    u = q.first("SELECT display_name, username FROM users WHERE id = ?", uid)
+    u = q.first("SELECT id, display_name, username, role FROM users WHERE id = ?", uid)
     if not u:
         raise HttpError(404, "Account not found")
+    if u["id"] != user.id:
+        _guard(user, u["role"])
     h = hash_password(check_password_rules(b.get("password")))
     t = now()
     q.batch(
@@ -130,22 +149,26 @@ def users_password(user: SessionUser, b: dict):
 
 def users_signout(user: SessionUser, b: dict):
     uid = str(b.get("id") if b.get("id") is not None else "")
-    u = q.first("SELECT display_name FROM users WHERE id = ?", uid)
+    u = q.first("SELECT id, display_name, role FROM users WHERE id = ?", uid)
     if not u:
         raise HttpError(404, "Account not found")
+    if u["id"] != user.id:
+        _guard(user, u["role"])
     q.run("UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL AND id != ?", now(), uid, user.session_id or "")
     write_log(user, {"kind": "security", "action": "user.signout", "summary": f"{user.name} signed {u['display_name']} out of every device", "targetType": "user", "targetIds": [uid]})
     return {"ok": True}
 
 
 def users_delete(user: SessionUser, b: dict):
+    require_power(user, "deleteUsers")
     uid = str(b.get("id") if b.get("id") is not None else "")
     if uid == user.id:
         raise HttpError(400, "You can't delete your own account")
     u = q.first("SELECT display_name, username, role, avatar_key FROM users WHERE id = ?", uid)
     if not u:
         raise HttpError(404, "Account not found")
-    if u["role"] == "owner" and _active_owners(uid) == 0:
+    _guard(user, u["role"])
+    if u["role"] in ("owner", "superadmin") and _active_owners(uid) == 0:
         raise HttpError(400, "There must always be at least one Owner")
     q.batch([("DELETE FROM sessions WHERE user_id = ?", [uid]), ("DELETE FROM settings WHERE `key` = ?", [_pins_key(uid)]), ("DELETE FROM users WHERE id = ?", [uid])])
     if u.get("avatar_key"):
@@ -161,8 +184,8 @@ def users_delete(user: SessionUser, b: dict):
 def audit_list(user: SessionUser, b: dict):
     where, vals = [], []
     kind = "security" if b.get("kind") == "security" else "all" if b.get("kind") == "all" else "content"
-    if kind in ("security", "all") and not at_least(user.role, "owner"):
-        raise HttpError(403, "Only an Owner can see the security log.")
+    if kind in ("security", "all") and not (at_least(user.role, "owner") and powers(user.role)["securityLog"]):
+        raise HttpError(403, "Only the Super admin can see the security log." if at_least(user.role, "owner") else "Only an Owner can see the security log.")
     if kind != "all":
         where.append("kind = ?")
         vals.append(kind)
@@ -292,6 +315,7 @@ def settings_set(user: SessionUser, b: dict):
     if b.get("key") == "security":
         if not at_least(user.role, "owner"):
             raise HttpError(403, "Only an Owner can change security settings.")
+        require_power(user, "settings")
         v = b.get("value") if isinstance(b.get("value"), dict) else {}
         value = {"lockout": v.get("lockout") is True}
         q.run(UPSERT_SETTING, "security", _dumps(value), now(), user.username)

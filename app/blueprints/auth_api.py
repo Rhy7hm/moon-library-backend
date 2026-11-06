@@ -29,6 +29,7 @@ from ..auth import (
     hash_password,
     lockout_on,
     new_user_id,
+    powers,
     require_user,
     session_cookie,
     verify_password,
@@ -76,6 +77,7 @@ def _user_out(u, *, lang=None, avatar_key=None) -> dict:
         out["avatarKey"] = avatar_key if avatar_key is not None else out.get("avatarKey")
     if lang is not None:
         out["lang"] = lang
+    out["powers"] = powers(out["role"])
     return out
 
 

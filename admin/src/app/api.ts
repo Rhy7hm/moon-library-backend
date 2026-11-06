@@ -7,8 +7,11 @@ import { api as call, ApiError, type ApiCtx } from '@/lib/upload-client';
 export const ctx: ApiCtx = { base: '' };
 export { ApiError };
 
-export type Role = 'owner' | 'editor' | 'viewer';
-export type Me = { id: string; username: string; name: string; role: Role; avatarKey?: string | null; lang?: string | null };
+export type Role = 'superadmin' | 'owner' | 'editor' | 'viewer';
+/** What only the Super admin can do (Owners too, while there's no Super admin). */
+export type Powers = { super: boolean; manageOwners: boolean; deleteUsers: boolean; settings: boolean; securityLog: boolean };
+export const roleLabel = (r: string) => (r === 'superadmin' ? 'Super admin' : r[0].toUpperCase() + r.slice(1));
+export type Me = { id: string; username: string; name: string; role: Role; avatarKey?: string | null; lang?: string | null; powers?: Powers };
 
 export type FileRow = {
   id: string;

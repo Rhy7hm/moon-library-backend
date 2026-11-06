@@ -1366,3 +1366,12 @@ body.is-moving .folder:not(.drop-on) { box-shadow: inset 0 0 0 1.5px color-mix(i
 .remove-client .backup-switch small { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
 .remove-client .backup-switch small svg { width: 13px; height: 13px; }
 .remove-client-note { font-size: 12px !important; color: var(--ink-3); }
+
+/* ---------------- Super admin ---------------- */
+.role-pill.super { display: inline-flex; align-items: center; gap: 5px; color: #8a5a00; background: linear-gradient(135deg, #ffe7a3, #ffd36b); box-shadow: inset 0 0 0 1px rgba(176, 120, 0, 0.25); }
+.role-pill.super svg { width: 13px; height: 13px; }
+:root[data-theme='dark'] .role-pill.super, :root.dark .role-pill.super { color: #ffd77a; background: rgba(255, 196, 64, 0.16); box-shadow: inset 0 0 0 1px rgba(255, 196, 64, 0.3); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) .role-pill.super { color: #ffd77a; background: rgba(255, 196, 64, 0.16); box-shadow: inset 0 0 0 1px rgba(255, 196, 64, 0.3); } }
+.team-row.is-super .avatar { box-shadow: 0 0 0 2px #ffd36b; }
+.role-cards.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 900px) { .role-cards.four { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
