@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { assetSize, errText, mainFile, nameOf, op, roleLabel, titleOf, type Asset, type Client, type Folder, type Role } from './api';
 import { fmtAgo, fmtDate, fmtSize, greeting, typeOf } from './format';
-import { IChevD, IDoc, IImage, IKey, ILock, IPen, IPlus, IPulse, IRestore, ISparkles, ITrash, IUnlock, IUpload, IVideo } from './icons';
+import { IChevD, IDoc, IImage, IKey, ILock, IPen, IPencil, IPlus, IPulse, IRestore, ISparkles, ITrash, IUnlock, IUpload, IVideo } from './icons';
 import { ClientAvatar } from './clients';
 import { shatter } from './shatter';
 import { ShredDialog, type ShredItem } from './shredder';
@@ -525,6 +525,7 @@ export function TeamPage() {
   const [adding, setAdding] = useState(false);
   const [made, setMade] = useState<{ username: string; password: string } | null>(null);
   const [deleting, setDeleting] = useState<User | null>(null);
+  const [renaming, setRenaming] = useState<User | null>(null);
   const load = () => op<{ users: User[] }>('users.list', {}).then((r) => setUsers(r.users), (e) => s.toast(errText(e), { tone: 'err' }));
   useEffect(() => {
     load();
@@ -554,7 +555,10 @@ export function TeamPage() {
               // a Super admin's account: only a Super admin; an Owner's: whoever has the manageOwners power
               const manage = s.isOwner && !mine && (u.role === 'superadmin' ? s.powers.super : u.role === 'owner' ? s.powers.manageOwners : true);
               const roleEditable = manage && u.role !== 'superadmin';
+              const editName: MenuItem = { label: 'Edit name…', icon: <IPencil />, onClick: () => setRenaming(u) };
               const menu: MenuItem[] = [
+                editName,
+                'sep',
                 {
                   label: 'Reset password',
                   icon: <IKey />,
@@ -603,7 +607,7 @@ export function TeamPage() {
                       {roleLabel(u.role)}
                     </span>
                   )}
-                  {manage ? <MenuButton items={menu} label={`More for ${u.name}`} /> : <span className="team-menu-gap" />}
+                  {manage ? <MenuButton items={menu} label={`More for ${u.name}`} /> : mine && s.isOwner ? <MenuButton items={[editName]} label="More for you" /> : <span className="team-menu-gap" />}
                 </div>
               );
             })}
@@ -617,6 +621,20 @@ export function TeamPage() {
           </div>
         ))}
       </div>
+      {renaming && (
+        <RenamePerson
+          user={renaming}
+          onClose={() => setRenaming(null)}
+          onSave={async (name) => {
+            const u = renaming;
+            if (await s.run('users.update', { id: u.id, name }, `${u.name} is now “${name}”`)) {
+              setRenaming(null);
+              if (u.id === s.me.id) s.setMe({ name });
+              load();
+            }
+          }}
+        />
+      )}
       {deleting && (
         <ConfirmDialog
           title={`Delete ${deleting.name}'s account?`}
@@ -674,6 +692,33 @@ export function TeamPage() {
         </Dialog>
       )}
     </div>
+  );
+}
+
+function RenamePerson({ user, onClose, onSave }: { user: User; onClose: () => void; onSave: (name: string) => void }) {
+  const [name, setName] = useState(user.name);
+  const clean = name.trim().replace(/\s+/g, ' ');
+  const valid = !!clean && clean !== user.name;
+  const save = () => valid && onSave(clean);
+  return (
+    <Dialog
+      title="Edit name"
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button kind="primary" disabled={!valid} onClick={save}>
+            Save
+          </Button>
+        </>
+      }
+    >
+      <label className="field">
+        <span>Display name</span>
+        <input autoFocus maxLength={60} value={name} onChange={(e) => setName(e.target.value)} onFocus={(e) => e.target.select()} onKeyDown={(e) => e.key === 'Enter' && save()} placeholder="e.g. Tan Jia Wen" />
+        <small>What the team sees in the library and Activity. Their sign-in ID stays @{user.username}.</small>
+      </label>
+    </Dialog>
   );
 }
 

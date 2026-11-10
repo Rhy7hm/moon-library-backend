@@ -78,3 +78,15 @@ def test_she_counts_as_someone_who_can_run_the_library(app, client):
     op(client, "users.delete", {"id": oid})  # she's still there, so the last Owner can go
     r = op(client, "users.delete", {"id": sid}, status=400)
     assert "own account" in r["error"]
+
+
+def test_edit_display_names(owner, app):
+    sid = make_user(app, "boss", role="superadmin", name="boss")
+    ed = make_user(app, "ed", role="editor", name="ed")
+    op(owner, "users.update", {"id": ed, "name": "  Tan Jia Wen "})
+    assert users(owner)["ed"]["name"] == "Tan Jia Wen"
+    op(owner, "users.update", {"id": sid, "name": "Nope"}, status=403)  # her account is still hers
+    boss = app.test_client()
+    login(boss, "boss")
+    op(boss, "users.update", {"id": sid, "name": "Madam Boss"})  # her own name
+    assert me(boss)["name"] == "Madam Boss"
