@@ -1,11 +1,11 @@
 /* The library: folder browser, Recent and search results, all built on one file grid. */
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fileUrl, mainFile, nameOf, titleOf, type Asset, type Folder } from './api';
 import { fmtDate, fmtSize, matchesType, typeOf, type TypeFilter } from './format';
 import { canConvert, ConvertDialog } from './convert';
 import { IClock, IDownload, IFolder, IGrid, IList, IMove, IPencil, IPin, IPinOff, IPlus, IReplace, ISearch, IShare, ITag, ITrash, IUpload, IX } from './icons';
 import { ClientAvatar, ShareWithClients } from './clients';
-import { useFileDrop, useStore } from './store';
+import { sheetOrder, useFileDrop, useStore } from './store';
 import { isEmpty, KIND_LABEL, KIND_QUERY, matches, parse, withFilter, without, type Token } from './search';
 import { TagDialog, tagQuery } from './tags';
 import { AssetBadges, AssetCard, Button, Crumbs, Empty, FolderPicker, FolderTile, PageHeader, PromptDialog, Segmented, Thumb, TypeIcon, endDrag, startDrag, type MenuItem } from './ui';
@@ -167,6 +167,8 @@ function FileGrid({ assets, showWhere, empty }: { assets: Asset[]; showWhere?: b
   const [view, setView] = useState<View>(() => pref('view', 'grid'));
   const [sel, setSel] = useState<Set<string>>(new Set());
   const anchor = useRef<string | null>(null);
+  // how big the pictures in the grid are
+  const [zoom, setZoom] = useState(() => Number(pref('zoom', '1')));
 
   const shown = useMemo(() => {
     const list = assets.filter((a) => matchesType(a, type));
@@ -202,6 +204,50 @@ function FileGrid({ assets, showWhere, empty }: { assets: Asset[]; showWhere?: b
     anchor.current = id;
   };
   const selected = shown.filter((a) => sel.has(a.id));
+
+  // A big folder is drawn a screenful at a time: more cards are added as the end comes into view.
+  const PAGE = 120;
+  const [limit, setLimit] = useState(PAGE);
+  useEffect(() => setLimit(PAGE), [type, sort]);
+  const more = useRef<HTMLDivElement>(null);
+  const hasMore = shown.length > limit;
+  useEffect(() => {
+    const el = more.current;
+    if (!el || !hasMore) return;
+    const io = new IntersectionObserver((e) => e.some((x) => x.isIntersecting) && setLimit((n) => n + PAGE), { rootMargin: '900px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasMore, limit]);
+  const visible = hasMore ? shown.slice(0, limit) : shown;
+  const open = (a: Asset) => {
+    sheetOrder.ids = shown.map((x) => x.id);
+    s.openSheet(a.id);
+  };
+
+  // Keyboard: ⌘/Ctrl+A selects everything shown, Esc clears, Delete (or ⌘/Ctrl+Backspace) moves the selection to the Trash.
+  const keys = useRef({ shown, selected });
+  keys.current = { shown, selected };
+  const sheetOpen = !!s.sheet;
+  const canEdit = s.canEdit;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement;
+      if (sheetOpen || el.closest('input, textarea, select, [contenteditable]') || document.querySelector('.scrim, .spotlight')) return;
+      const { shown, selected } = keys.current;
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a' && shown.length) {
+        e.preventDefault();
+        setSel(new Set(shown.map((a) => a.id)));
+      } else if (e.key === 'Escape' && selected.length) setSel(new Set());
+      else if ((e.key === 'Delete' || (e.key === 'Backspace' && (e.metaKey || e.ctrlKey))) && selected.length && canEdit) {
+        e.preventDefault();
+        trashAssets(selected.map((a) => a.id));
+        setSel(new Set());
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [sheetOpen, canEdit]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const where = (a: Asset) => (showWhere ? s.path(a.folderId).map(nameOf).join(' › ') || 'Library' : undefined);
   // dragging a selected card takes the whole selection along
   const drag = (a: Asset) => (s.canEdit ? (e: React.DragEvent) => startDrag(e, { items: sel.has(a.id) ? selected.map((x) => x.id) : [a.id], folders: [] }) : undefined);
@@ -231,6 +277,19 @@ function FileGrid({ assets, showWhere, empty }: { assets: Asset[]; showWhere?: b
               <option value="name">Name</option>
               <option value="size">Largest first</option>
             </select>
+            {view === 'grid' && (
+              <input
+                className="zoom"
+                type="range"
+                min={0}
+                max={2}
+                step={1}
+                value={zoom}
+                aria-label="Picture size"
+                title="Picture size"
+                onChange={(e) => (setZoom(Number(e.target.value)), save('zoom', e.target.value))}
+              />
+            )}
             <Segmented
               label="View"
               value={view}
@@ -247,9 +306,9 @@ function FileGrid({ assets, showWhere, empty }: { assets: Asset[]; showWhere?: b
       {!shown.length ? (
         assets.length ? <p className="muted pad">No {typeOpts.find((o) => o.value === type)!.label.toLowerCase()} here.</p> : empty
       ) : view === 'grid' ? (
-        <div className="grid" key={type + sort}>
-          {shown.map((a) => (
-            <AssetCard key={a.id} asset={a} selected={sel.has(a.id)} selecting={sel.size > 0} onToggle={(e) => toggle(a.id, e)} onOpen={() => s.openSheet(a.id)} menu={assetMenu(a)} where={where(a)} onDragStart={drag(a)} />
+        <div className={`grid zoom-${zoom}`} key={type + sort}>
+          {visible.map((a) => (
+            <AssetCard key={a.id} asset={a} selected={sel.has(a.id)} selecting={sel.size > 0} onToggle={(e) => toggle(a.id, e)} onOpen={() => open(a)} menu={assetMenu(a)} where={where(a)} onDragStart={drag(a)} />
           ))}
         </div>
       ) : (
@@ -261,14 +320,14 @@ function FileGrid({ assets, showWhere, empty }: { assets: Asset[]; showWhere?: b
             <span>Size</span>
             <span>Added</span>
           </div>
-          {shown.map((a) => {
+          {visible.map((a) => {
             const f = mainFile(a);
             return (
               <div
                 key={a.id}
                 className={`tr${sel.has(a.id) ? ' selected' : ''}`}
                 role="row"
-                onClick={(e) => (sel.size || e.metaKey || e.ctrlKey || e.shiftKey ? toggle(a.id, e) : s.openSheet(a.id))}
+                onClick={(e) => (sel.size || e.metaKey || e.ctrlKey || e.shiftKey ? toggle(a.id, e) : open(a))}
                 draggable={s.canEdit}
                 onDragStart={drag(a)}
                 onDragEnd={endDrag}
@@ -289,6 +348,12 @@ function FileGrid({ assets, showWhere, empty }: { assets: Asset[]; showWhere?: b
               </div>
             );
           })}
+        </div>
+      )}
+
+      {hasMore && (
+        <div ref={more} className="grid-more muted">
+          Showing {limit} of {shown.length}…
         </div>
       )}
 

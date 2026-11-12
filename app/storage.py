@@ -160,6 +160,9 @@ class R2Storage:
 
     def delete(self, keys: list[str]) -> None:
         keys = list(dict.fromkeys(k for k in keys if k))
+        from . import thumb_cache
+
+        thumb_cache.drop(keys)  # this server's own copies of thumbnails go first
         transient = {
             "InternalError", "InternalFailure", "ServiceUnavailable", "SlowDown",
             "RequestTimeout", "RequestTimeoutException", "Throttling",

@@ -144,6 +144,9 @@ class Config:
 
         # uploads: the admin panel sends at most 20 MB in one piece, or 10 MB parts
         self.MAX_UPLOAD_BODY = 95 * 1024 * 1024
+        # thumbnails kept on this server's disk (app/thumb_cache.py): folder (default instance/thumb-cache) and its limit in MB; 0 = off
+        self.THUMB_CACHE_DIR = _env("THUMB_CACHE_DIR")
+        self.THUMB_CACHE_MB = int(_env("THUMB_CACHE_MB", "0" if self.TESTING else "1024") or 0)
         self.MAX_CONTENT_LENGTH = 96 * 1024 * 1024
         # the built admin panel (npm run build in admin/)
         self.ADMIN_DIST = _env("ADMIN_DIST") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "admin", "dist")

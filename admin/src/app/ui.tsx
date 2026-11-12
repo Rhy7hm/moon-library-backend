@@ -528,7 +528,24 @@ export function Thumb({ asset, fit = 'cover' }: { asset: Asset; fit?: 'cover' | 
   const f = mainFile(asset);
   const src = f ? f.thumb ?? f.poster : null;
   const [failed, setFailed] = useState(false);
-  if (f && src && !failed) return <img className={`thumb-img ${fit}`} src={fileUrl(src)} alt="" loading="lazy" draggable={false} onError={() => setFailed(true)} />;
+  // fades in when it has loaded (at once when the browser already has it)
+  const [loaded, setLoaded] = useState(false);
+  if (f && src && !failed)
+    return (
+      <img
+        className={`thumb-img ${fit}${loaded ? ' loaded' : ''}`}
+        src={fileUrl(src)}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        draggable={false}
+        ref={(el) => {
+          if (el?.complete && el.naturalWidth && !loaded) setLoaded(true);
+        }}
+        onLoad={() => setLoaded(true)}
+        onError={() => setFailed(true)}
+      />
+    );
   const color = f ? extColor(f.name) : '#a1a1a6';
   return (
     <div className="thumb-tile" style={{ ['--c' as string]: color }}>

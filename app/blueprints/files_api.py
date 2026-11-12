@@ -17,6 +17,7 @@ from ..db import in_list, q
 from ..media import safe_file_headers
 from ..langs import LANG_CODES, clean_langs, dl_name, is_file_lang, pick_text
 from ..services.admin_ops import content_disposition
+from .. import thumb_cache
 from ..storage import StorageError, storage
 
 bp = Blueprint("files_api", __name__)
@@ -52,8 +53,8 @@ def serve_file(key: str):
     if not re.match(r"^(o|v|t|p|i|c|u)/", key) or not get_user():
         return Response("Not found", status=404, mimetype="text/plain", headers={"Cache-Control": "no-store"})
     dl = (request.args.get("dl") or key.split("/")[-1] or "download") if "dl" in request.args else None
-    # keys never change (a replaced file gets new ones), so the browser may keep its own copy
-    return stream_key(key, "private, max-age=86400", dl)
+    # keys never change (a replaced file gets new ones), so the browser keeps its own copy and never asks again
+    return stream_key(key, "private, max-age=31536000, immutable", dl)
 
 
 def stream_key(key: str, cache: str, download_name: str | None = None) -> Response:
@@ -78,6 +79,19 @@ def stream_key(key: str, cache: str, download_name: str | None = None) -> Respon
         return Response(status=200, headers=headers)
 
     rng = _parse_range(request.headers.get("Range"))
+    # thumbnails and posters: from this server's disk when it has them (see app.thumb_cache)
+    small = not rng and not download_name and thumb_cache.cacheable(key)
+    if small:
+        hit = thumb_cache.get(key)
+        if hit:
+            ctype, etag, data = hit
+            finish(ctype)
+            if etag:
+                headers["ETag"] = etag
+                if request.headers.get("If-None-Match") == etag:
+                    return Response(status=304, headers=headers)
+            headers["Content-Length"] = str(len(data))
+            return Response(data, status=200, headers=headers)
     try:
         got = st.get(key, rng)
     except StorageError:
@@ -91,6 +105,13 @@ def stream_key(key: str, cache: str, download_name: str | None = None) -> Respon
     info, body, content_range, length = got
     finish(info.content_type)
     headers.update({"ETag": info.etag, "Content-Length": str(length)})
+    if small and length <= thumb_cache.MAX_OBJECT:
+        try:
+            data = body.read()
+        finally:
+            body.close()
+        thumb_cache.put(key, info.content_type, info.etag, data)
+        return Response(data, status=200, headers=headers)
 
     def gen():
         try:

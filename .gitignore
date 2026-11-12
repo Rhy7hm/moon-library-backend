@@ -21,3 +21,5 @@ logs/
 .ruff_cache/
 # the replaced Apple/Shopify admin design, kept in case it is wanted again
 .backup/
+# thumbnails kept on the server's disk (app/thumb_cache.py)
+instance/

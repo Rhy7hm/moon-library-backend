@@ -18,7 +18,7 @@ def test_files_need_a_staff_sign_in(owner, app):
         r = app.test_client().get(f_path(key))
         assert r.status_code == 404 and r.headers["Cache-Control"] == "no-store"
     r = owner.get(f_path(keys["orig"]))
-    assert r.status_code == 200 and r.data == PNG and r.headers["Cache-Control"] == "private, max-age=86400"
+    assert r.status_code == 200 and r.data == PNG and r.headers["Cache-Control"] == "private, max-age=31536000, immutable"
     # every role may look; a signed-out browser may not
     make_user(app, "viewer1", "viewer")
     viewer = app.test_client()

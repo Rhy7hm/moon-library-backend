@@ -4,9 +4,9 @@ import { adFormat } from '@/lib/adformat';
 import { errText, extOf, fileUrl, mainFile, nameOf, op, titleOf, type Asset, type Tag } from './api';
 import { fmtDate, fmtDuration, fmtSize, typeOf } from './format';
 import { canConvert, ConvertDialog } from './convert';
-import { IDownload, IMove, IReplace, IRestore, ITrash, IX, IShare } from './icons';
+import { IChevR, IDownload, IMove, IReplace, IRestore, ITrash, IX, IShare } from './icons';
 import { ClientAvatar, ShareWithClients } from './clients';
-import { useStore } from './store';
+import { sheetOrder, useStore } from './store';
 import { TagChip, TagEditor, tagQuery } from './tags';
 import { Button, FolderPicker, Thumb } from './ui';
 
@@ -44,12 +44,23 @@ export function AssetSheet() {
     // re-read when the file changes (replace / restore)
   }, [asset?.id, asset?.variants[0]?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ← and → walk through the list this file was opened from
+  const at = s.sheet ? sheetOrder.ids.indexOf(s.sheet) : -1;
+  const step = (d: number) => {
+    const next = at >= 0 ? sheetOrder.ids[at + d] : undefined;
+    if (next && s.tree?.items.some((a) => a.id === next)) s.openSheet(next);
+  };
   useEffect(() => {
     if (!s.sheet) return;
-    const esc = (e: KeyboardEvent) => e.key === 'Escape' && !(e.target as HTMLElement).closest('input') && s.openSheet(null);
-    document.addEventListener('keydown', esc);
-    return () => document.removeEventListener('keydown', esc);
-  }, [s.sheet, s]);
+    const key = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement).closest('input, textarea, select, [contenteditable]') || document.querySelector('.scrim')) return;
+      if (e.key === 'Escape') s.openSheet(null);
+      else if (e.key === 'ArrowRight') step(1);
+      else if (e.key === 'ArrowLeft') step(-1);
+    };
+    document.addEventListener('keydown', key);
+    return () => document.removeEventListener('keydown', key);
+  }, [s.sheet, s]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!s.sheet) return null;
   if (!asset) return null;
@@ -120,6 +131,19 @@ export function AssetSheet() {
             onBlur={saveTitle}
             onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
           />
+          {at >= 0 && sheetOrder.ids.length > 1 && (
+            <span className="sheet-nav">
+              <button className="icon-btn" aria-label="Previous file" title="Previous (←)" disabled={at === 0} onClick={() => step(-1)}>
+                <IChevR style={{ transform: 'rotate(180deg)' }} />
+              </button>
+              <small>
+                {at + 1} / {sheetOrder.ids.length}
+              </small>
+              <button className="icon-btn" aria-label="Next file" title="Next (→)" disabled={at === sheetOrder.ids.length - 1} onClick={() => step(1)}>
+                <IChevR />
+              </button>
+            </span>
+          )}
           <button className="icon-btn" aria-label="Close" onClick={() => s.openSheet(null)}>
             <IX />
           </button>

@@ -163,7 +163,7 @@ def test_multipart_upload_and_range_requests(owner, client):
 
     h = client.head(path)
     assert h.status_code == 200 and h.headers["Content-Length"] == str(len(data)) and h.headers["Accept-Ranges"] == "bytes"
-    assert h.headers["Content-Type"] == "video/mp4" and h.headers["Cache-Control"] == "private, max-age=86400" and h.headers["ETag"].startswith('"')
+    assert h.headers["Content-Type"] == "video/mp4" and h.headers["Cache-Control"] == "private, max-age=31536000, immutable" and h.headers["ETag"].startswith('"')
     r = client.get(path, headers={"Range": "bytes=100-1099"})
     assert r.status_code == 206 and r.data == data[100:1100] and r.headers["Content-Range"] == f"bytes 100-1099/{len(data)}" and r.headers["Content-Length"] == "1000"
     r = client.get(path, headers={"Range": f"bytes={len(data) - 10}-"})

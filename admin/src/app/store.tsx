@@ -58,6 +58,9 @@ export function routeHash(r: Route) {
 
 export type UploadJob = { id: string; name: string; size: number; pct: number; state: 'waiting' | 'working' | 'done' | 'failed'; error?: string };
 
+/** The files of the list the open file was opened from, in order: ← and → in the file panel walk through it. */
+export const sheetOrder: { ids: string[] } = { ids: [] };
+
 /** Where a dropped file sat inside the folder that was dropped ("Raya/Posters"), so its folders can be made too. */
 const relDirs = new WeakMap<File, string>();
 const relDirOf = (f: File) => relDirs.get(f) || (f.webkitRelativePath ? f.webkitRelativePath.split('/').slice(0, -1).join('/') : '');
