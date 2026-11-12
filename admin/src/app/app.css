@@ -551,6 +551,9 @@ section { margin-bottom: 28px; }
 .tray li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; font-size: 12.5px; }
 .tray-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tray-meta { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.tray-retry { flex: none; height: 28px; padding: 0 12px; border-radius: 999px; background: var(--primary); color: var(--primary-ink); font-size: 12.5px; font-weight: 600; }
+.tray-retry:hover { opacity: .85; }
+.tray li.tray-more { display: block; color: var(--ink-2); font-size: 12px; text-align: center; }
 .tray-bar { grid-column: 1 / -1; height: 3px; border-radius: 3px; background: var(--press); overflow: hidden; }
 .tray-bar i { display: block; height: 100%; border-radius: 3px; background: var(--accent); transition: width 0.3s var(--ease); }
 .tray li.done .tray-bar i { background: var(--ok); }
@@ -1375,3 +1378,7 @@ body.is-moving .folder:not(.drop-on) { box-shadow: inset 0 0 0 1.5px color-mix(i
 .team-row.is-super .avatar { box-shadow: 0 0 0 2px #ffd36b; }
 .role-cards.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 @media (max-width: 900px) { .role-cards.four { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* Convert… */
+.convert .field { margin-bottom: 16px; }
+.convert-note { margin: 0 0 6px; font-size: 12.5px; }

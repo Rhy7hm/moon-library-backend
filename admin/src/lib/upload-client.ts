@@ -58,21 +58,68 @@ const SINGLE_LIMIT = 20 * 1024 * 1024;
 
 type PutMeta = { contentType: string; downloadName?: string };
 
+const retryable = (e: unknown) => !(e instanceof ApiError) || e.status >= 500 || e.status === 408 || e.status === 429;
+
+/** One PUT. In the browser it reports bytes as they leave (fetch can't), so small files show real progress too. */
+function putOnce(ctx: ApiCtx, url: string, blob: Blob, onBytes: (n: number) => void): Promise<void> {
+  if (typeof XMLHttpRequest === 'undefined') {
+    return fetch(url, { method: 'PUT', headers: { 'content-type': 'application/octet-stream', ...ctx.headers }, body: blob, credentials: 'same-origin' })
+      .then(check)
+      .then(() => undefined);
+  }
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open('PUT', url);
+    x.withCredentials = true;
+    x.setRequestHeader('content-type', 'application/octet-stream');
+    for (const [k, v] of Object.entries(ctx.headers ?? {})) x.setRequestHeader(k, v);
+    let seen = 0;
+    x.upload.onprogress = (e) => {
+      onBytes(e.loaded - seen);
+      seen = e.loaded;
+    };
+    x.onload = () => {
+      if (x.status >= 200 && x.status < 300) return resolve();
+      if (x.status === 401) signedOut?.();
+      let msg = `${x.status} ${x.statusText}`;
+      try {
+        const j = JSON.parse(x.responseText) as { error?: string };
+        if (j.error) msg = j.error;
+      } catch {
+        /* not JSON */
+      }
+      reject(new ApiError(x.status, msg));
+    };
+    x.onerror = () => reject(new TypeError('The connection dropped'));
+    x.onabort = () => reject(new TypeError('Upload stopped'));
+    x.send(blob);
+  });
+}
+
 /** Uploads one blob to an R2 key, in parts if it's large. Reports bytes sent. */
 export async function putBlob(ctx: ApiCtx, key: string, blob: Blob, meta: PutMeta, onBytes?: (n: number) => void) {
   const qs = (extra: Record<string, string>) =>
     new URLSearchParams({ key, contentType: meta.contentType, ...(meta.downloadName ? { downloadName: meta.downloadName } : {}), ...extra }).toString();
 
   if (blob.size <= SINGLE_LIMIT) {
-    const res = await fetch(`${ctx.base}/api/admin/upload?${qs({})}`, {
-      method: 'PUT',
-      headers: { 'content-type': 'application/octet-stream', ...ctx.headers },
-      body: blob,
-      credentials: 'same-origin',
-    });
-    await check(res);
-    onBytes?.(blob.size);
-    return;
+    // a dropped connection or a busy server is tried again; anything the server refuses is not
+    let attempt = 0;
+    let counted = 0;
+    for (;;) {
+      try {
+        await putOnce(ctx, `${ctx.base}/api/admin/upload?${qs({})}`, blob, (n) => {
+          counted += n;
+          onBytes?.(n);
+        });
+        if (counted < blob.size) onBytes?.(blob.size - counted);
+        return;
+      } catch (e) {
+        onBytes?.(-counted); // the bar goes back for the part being sent again
+        counted = 0;
+        if (!retryable(e) || ++attempt >= 3) throw e;
+        await new Promise((r) => setTimeout(r, 800 * attempt));
+      }
+    }
   }
 
   const { uploadId } = await api<{ uploadId: string }>(ctx, 'mpu.create', { key, ...meta });
@@ -126,7 +173,9 @@ export type Derived = {
 };
 
 export type VersionInput = {
-  itemId: string;
+  /** the card this file belongs to — or leave out and give `newItem` to make the card in the same call */
+  itemId?: string;
+  newItem?: { folderId: string; title: I18nText };
   lang: FileLang;
   /** a design in several languages: all of them, main one first */
   langs?: FileLang[];
@@ -144,6 +193,8 @@ export type UploadOptions = {
   touch?: boolean;
   /** Id of an older version this upload replaces; it is deleted once this one is ready. */
   replaces?: string;
+  /** Told as soon as the file is registered (before its bytes go up), e.g. to tidy up if the upload fails. */
+  onCreated?: (fileId: string, itemId: string) => void;
 };
 
 export async function uploadVersion(
@@ -153,11 +204,11 @@ export async function uploadVersion(
   opts: UploadOptions = {},
 ) {
   const d = input.derived;
-  const { id, keys } = await api<{ id: string; keys: { orig: string; opt: string | null; thumb: string | null; poster: string | null } }>(
+  const { id, itemId, keys } = await api<{ id: string; itemId: string; keys: { orig: string; opt: string | null; thumb: string | null; poster: string | null } }>(
     ctx,
     'file.create',
     {
-      itemId: input.itemId,
+      ...(input.itemId ? { itemId: input.itemId } : { folderId: input.newItem!.folderId, title: input.newItem!.title }),
       lang: input.lang,
       langs: input.langs ?? null,
       kind: input.kind,
@@ -175,19 +226,23 @@ export async function uploadVersion(
       focusY: d.focusY ?? null,
     },
   );
+  opts.onCreated?.(id, itemId);
   const total = input.file.size + (d.opt?.size ?? 0) + (d.thumb?.size ?? 0) + (d.poster?.size ?? 0);
   let sent = 0;
   const tick = (n: number) => {
     sent += n;
     onProgress?.(sent, total);
   };
-  if (keys.thumb && d.thumb) await putBlob(ctx, keys.thumb, d.thumb, { contentType: 'image/webp' }, tick);
-  if (keys.poster && d.poster) await putBlob(ctx, keys.poster, d.poster, { contentType: 'image/webp' }, tick);
+  // the original and its small copies go up side by side (one wait instead of four)
+  const puts: Promise<void>[] = [];
+  if (keys.thumb && d.thumb) puts.push(putBlob(ctx, keys.thumb, d.thumb, { contentType: 'image/webp' }, tick));
+  if (keys.poster && d.poster) puts.push(putBlob(ctx, keys.poster, d.poster, { contentType: 'image/webp' }, tick));
   if (keys.opt && d.opt) {
     const optName = input.name.replace(/\.[^.]+$/, '') + (d.optMime === 'image/webp' ? '.webp' : d.optMime === 'video/mp4' ? '.mp4' : '.jpg');
-    await putBlob(ctx, keys.opt, d.opt, { contentType: d.optMime ?? 'image/jpeg', downloadName: optName }, tick);
+    puts.push(putBlob(ctx, keys.opt, d.opt, { contentType: d.optMime ?? 'image/jpeg', downloadName: optName }, tick));
   }
-  await putBlob(ctx, keys.orig, input.file, { contentType: input.mime || 'application/octet-stream', downloadName: input.name }, tick);
+  puts.push(putBlob(ctx, keys.orig, input.file, { contentType: input.mime || 'application/octet-stream', downloadName: input.name }, tick));
+  await Promise.all(puts);
   await api(ctx, 'file.ready', { id, touch: opts.touch !== false, replaces: opts.replaces });
   return id;
 }

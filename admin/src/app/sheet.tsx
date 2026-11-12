@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { adFormat } from '@/lib/adformat';
 import { errText, extOf, fileUrl, mainFile, nameOf, op, titleOf, type Asset, type Tag } from './api';
 import { fmtDate, fmtDuration, fmtSize, typeOf } from './format';
+import { canConvert, ConvertDialog } from './convert';
 import { IDownload, IMove, IReplace, IRestore, ITrash, IX, IShare } from './icons';
 import { ClientAvatar, ShareWithClients } from './clients';
 import { useStore } from './store';
@@ -30,6 +31,7 @@ export function AssetSheet() {
   const [versions, setVersions] = useState<Version[] | null>(null);
   const [moving, setMoving] = useState(false);
   const [sharing, setSharing] = useState(false);
+  const [converting, setConverting] = useState(false);
   const input = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -133,6 +135,11 @@ export function AssetSheet() {
                 <span>Download</span>
               </a>
             )}
+            {canConvert(asset) && (
+              <Button onClick={() => setConverting(true)} title="Download in another format or size, or as a PDF">
+                Convert
+              </Button>
+            )}
             {s.canEdit && (
               <>
                 <Button icon={<IReplace />} onClick={() => input.current?.click()}>
@@ -208,6 +215,7 @@ export function AssetSheet() {
           </section>
         </div>
       </aside>
+      {converting && <ConvertDialog assets={[asset]} onClose={() => setConverting(false)} />}
       {sharing && <ShareWithClients kind="item" id={asset.id} label={titleOf(asset)} onClose={() => setSharing(false)} />}
       {moving && (
         <FolderPicker

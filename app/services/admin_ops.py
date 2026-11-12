@@ -504,8 +504,16 @@ def items_status(ctx: Ctx, b: Body):
 
 def file_create(ctx: Ctx, b: Body):
     """Registers a file before its bytes are uploaded; returns the storage keys to upload to."""
-    item_id = _str(b.get("itemId"), "itemId")
-    _item_row(item_id)
+    # a new card and its file in one call (saves a round trip per file in big uploads)
+    new_item = None
+    if b.get("itemId") is None and b.get("folderId") is not None:
+        folder_id = _str(b.get("folderId"), "folderId")
+        _folder_exists(folder_id)
+        new_item = (new_id(), folder_id, _text(b.get("title"), "Title"))
+        item_id = new_item[0]
+    else:
+        item_id = _str(b.get("itemId"), "itemId")
+        _item_row(item_id)
     lang = b["lang"] if is_file_lang(b.get("lang")) else "en"
     extra = [] if lang == "all" else [l for l in clean_langs(b.get("langs")) if l != lang and l != "all"]
     kind = b.get("kind") if b.get("kind") in ("image", "video", "audio", "document", "other") else "other"
@@ -518,6 +526,11 @@ def file_create(ctx: Ctx, b: Body):
     fid = new_id()
     keys = _make_keys(fid, name, b)
     t = now()
+    if new_item:
+        q.run(
+            "INSERT INTO items (id,folder_id,title,pinned,created_at,updated_at,created_by) VALUES (?,?,?,?,?,?,?)",
+            new_item[0], new_item[1], _dumps(new_item[2]), 0, t, t, ctx.user,
+        )
     q.run(
         """INSERT INTO files (id,item_id,lang,extra_langs,kind,name,mime,size,width,height,duration,key_orig,key_opt,opt_mime,key_thumb,key_poster,caption,focus_y,status,created_at,updated_at)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'uploading',?,?)""",
@@ -526,7 +539,7 @@ def file_create(ctx: Ctx, b: Body):
         keys["orig"], keys["opt"], (b.get("optMime") if isinstance(b.get("optMime"), str) else None) if keys["opt"] else None,
         keys["thumb"], keys["poster"], _opt_str(b.get("caption")), _num(b.get("focusY")), t, t,
     )
-    return {"id": fid, "keys": keys}
+    return {"id": fid, "itemId": item_id, "keys": keys}
 
 
 def _int_or_none(v):
@@ -650,6 +663,9 @@ def file_delete(ctx: Ctx, b: Body):
     if row["status"] != "ready":
         delete_storage(file_keys(row))
         q.run("DELETE FROM files WHERE id = ?", fid)
+        # an upload that failed: its card goes too if this was all it had (so trying again doesn't leave an empty one)
+        if b.get("dropEmptyItem") is True and not q.first("SELECT id FROM files WHERE item_id = ? LIMIT 1", row["item_id"]):
+            q.run("DELETE FROM items WHERE id = ?", row["item_id"])
         return {"ok": True, "versionId": None}
     return {"ok": True, "versionId": archive_file(fid, "deleted", ctx.user)}
 

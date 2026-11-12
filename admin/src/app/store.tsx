@@ -3,8 +3,8 @@
  * and the upload queue. One context keeps the pages simple.
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { createItem, guessMime, kindOf, onSignedOut, uploadVersion } from '@/lib/upload-client';
-import { errText, loadClients, loadTree, op, type Asset, type Client, type Folder, type Me, type Powers, type Tag, type Tree } from './api';
+import { guessMime, kindOf, onSignedOut, uploadVersion } from '@/lib/upload-client';
+import { errText, loadClients, loadTree, nameOf, op, type Asset, type Client, type Folder, type Me, type Powers, type Tag, type Tree } from './api';
 import { deriveAudio, deriveImage, deriveVideo } from './derive/derive';
 import { deriveDesign, isDesignFile } from './derive/derive-design';
 
@@ -58,6 +58,12 @@ export function routeHash(r: Route) {
 
 export type UploadJob = { id: string; name: string; size: number; pct: number; state: 'waiting' | 'working' | 'done' | 'failed'; error?: string };
 
+/** Where a dropped file sat inside the folder that was dropped ("Raya/Posters"), so its folders can be made too. */
+const relDirs = new WeakMap<File, string>();
+const relDirOf = (f: File) => relDirs.get(f) || (f.webkitRelativePath ? f.webkitRelativePath.split('/').slice(0, -1).join('/') : '');
+/** Files this big go up in parts; only two of them at a time. */
+const BIG_FILE = 20 * 1024 * 1024;
+
 /* ---------------- context ---------------- */
 
 type Toast = { id: number; text: string; tone?: 'ok' | 'err'; undo?: () => void };
@@ -95,6 +101,8 @@ type Store = {
   upload: (files: File[], folderId: string | null) => Promise<void>;
   replaceFile: (asset: Asset, file: File) => Promise<void>;
   clearUploads: () => void;
+  /** tries the uploads that failed again */
+  retryUploads: () => void;
   run: <T>(name: string, body: unknown, done?: string, undo?: () => Promise<unknown>) => Promise<T | null>;
   canEdit: boolean;
   isOwner: boolean;
@@ -245,48 +253,144 @@ export function StoreProvider({ me: meProp, onSignOut, children }: { me: Me; onS
     [reload, toast],
   );
 
-  const patchJob = (id: string, p: Partial<UploadJob>) => setUploads((u) => u.map((j) => (j.id === id ? { ...j, ...p } : j)));
+  // Progress arrives many times a second per file; it's gathered and shown a few times a second,
+  // so a big batch doesn't redraw the whole library on every tick.
+  const pending = useRef(new Map<string, Partial<UploadJob>>());
+  const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flushJobs = useCallback(() => {
+    flushTimer.current = null;
+    const p = pending.current;
+    if (!p.size) return;
+    pending.current = new Map();
+    setUploads((u) => u.map((j) => (p.has(j.id) ? { ...j, ...p.get(j.id) } : j)));
+  }, []);
+  const patchJob = useCallback(
+    (id: string, patch: Partial<UploadJob>) => {
+      pending.current.set(id, { ...pending.current.get(id), ...patch });
+      if (!flushTimer.current) flushTimer.current = setTimeout(flushJobs, 200);
+    },
+    [flushJobs],
+  );
+  const treeRef = useRef(tree);
+  treeRef.current = tree;
+  // what each upload was, so a failed one can be tried again
+  const sources = useRef(new Map<string, { file: File; folderId: string }>());
 
-  const upload = useCallback(
-    async (files: File[], folderId: string | null) => {
-      if (!folderId) {
-        // straight into the Library: the files go into "Unsorted", shown at the top of the Library
-        try {
-          folderId = (await op<{ id: string }>('folder.loose', {})).id;
-        } catch (e) {
-          toast(errText(e), { tone: 'err' });
-          return;
-        }
+  /** The folders a dropped folder had, made (or found) under `root` → where each "a/b" path goes. */
+  const foldersFor = useCallback(async (root: string | null, files: File[]) => {
+    const made = new Map<string, string | null>([['', root]]);
+    const known = (treeRef.current?.folders ?? []).filter((f) => !f.deletedAt);
+    for (const dir of [...new Set(files.map(relDirOf))].sort()) {
+      let at = '';
+      for (const part of dir.split('/').filter(Boolean)) {
+        const parent = made.get(at) ?? null;
+        at = at ? `${at}/${part}` : part;
+        if (made.has(at)) continue;
+        const have = known.find((f) => (f.parentId ?? null) === parent && nameOf(f).toLowerCase() === part.toLowerCase());
+        made.set(at, have ? have.id : (await op<{ id: string }>('folder.create', { parentId: parent, name: { en: part } })).id);
       }
-      const target = folderId;
-      const jobs = files.map((f) => ({ id: `u${++jobSeq}`, name: f.name, size: f.size, pct: 0, state: 'waiting' as const }));
-      setUploads((u) => [...u.filter((j) => j.state !== 'done'), ...jobs]);
+    }
+    return made;
+  }, []);
+
+  /** Sends jobs that are already listed in the tray. */
+  const runJobs = useCallback(
+    async (ids: string[]) => {
       let ok = 0;
-      // three at a time: quick for many small files, gentle for big videos
-      const queue = files.map((f, i) => [f, jobs[i].id] as const);
+      let big = 0;
+      const queue = [...ids];
+      // the library fills in as files land, not only when the whole batch is done
+      let last = Date.now();
+      const refresh = () => {
+        if (Date.now() - last < 4000) return;
+        last = Date.now();
+        void reload();
+      };
+      const one = async (jid: string) => {
+        const src = sources.current.get(jid);
+        if (!src) return;
+        const { file, folderId } = src;
+        patchJob(jid, { state: 'working', pct: 1, error: undefined });
+        let created: string | null = null;
+        try {
+          const mime = file.type || guessMime(file.name);
+          const kind = kindOf(file.name, mime);
+          const d = await derive(file);
+          await uploadVersion(
+            { base: '' },
+            { newItem: { folderId, title: { en: titleFromName(file.name) } }, lang: 'all', kind, name: file.name, mime, file, derived: d },
+            (s, t) => patchJob(jid, { pct: Math.min(99, Math.max(2, Math.round((s / t) * 100))) }),
+            { onCreated: (fid) => (created = fid) },
+          );
+          patchJob(jid, { state: 'done', pct: 100 });
+          sources.current.delete(jid);
+          ok++;
+          refresh();
+        } catch (e) {
+          patchJob(jid, { state: 'failed', error: errText(e) });
+          if (created) void op('file.delete', { id: created, dropEmptyItem: true }).catch(() => {});
+        }
+      };
+      // Four files at a time (each sends its copies side by side); of the big ones, sent in parts, two at a time.
       const worker = async () => {
-        for (let next = queue.shift(); next; next = queue.shift()) {
-          const [file, jid] = next;
-          patchJob(jid, { state: 'working', pct: 1 });
+        for (;;) {
+          let i = queue.findIndex((id) => (sources.current.get(id)?.file.size ?? 0) <= BIG_FILE || big < 2);
+          if (i < 0) {
+            if (!queue.length) return;
+            await new Promise((r) => setTimeout(r, 300)); // only big files left, and two are already going
+            continue;
+          }
+          const jid = queue.splice(i, 1)[0];
+          const isBig = (sources.current.get(jid)?.file.size ?? 0) > BIG_FILE;
+          if (isBig) big++;
           try {
-            const mime = file.type || guessMime(file.name);
-            const kind = kindOf(file.name, mime);
-            const d = await derive(file);
-            const itemId = await createItem({ base: '' }, target, { en: titleFromName(file.name) });
-            await uploadVersion({ base: '' }, { itemId, lang: 'all', kind, name: file.name, mime, file, derived: d }, (s, t) => patchJob(jid, { pct: Math.max(2, Math.round((s / t) * 100)) }));
-            patchJob(jid, { state: 'done', pct: 100 });
-            ok++;
-          } catch (e) {
-            patchJob(jid, { state: 'failed', error: errText(e) });
+            await one(jid);
+          } finally {
+            if (isBig) big--;
           }
         }
       };
-      await Promise.all([worker(), worker(), worker()]);
+      await Promise.all([worker(), worker(), worker(), worker()]);
+      flushJobs();
       await reload();
+      return ok;
+    },
+    [reload, patchJob, flushJobs],
+  );
+
+  const upload = useCallback(
+    async (files: File[], folderId: string | null) => {
+      let where: Map<string, string | null>;
+      try {
+        // a dropped folder keeps its folders (at the top of the Library when that's where it was dropped)
+        where = await foldersFor(folderId, files);
+        // files put straight into the Library go into "Unsorted", shown at the top of the Library
+        if (!folderId && files.some((f) => !relDirOf(f))) where.set('', (await op<{ id: string }>('folder.loose', {})).id);
+        if (where.size > 1) void reload();
+      } catch (e) {
+        toast(errText(e), { tone: 'err' });
+        return;
+      }
+      const jobs = files.map((f) => ({ id: `u${++jobSeq}`, name: f.name, size: f.size, pct: 0, state: 'waiting' as const }));
+      files.forEach((f, i) => sources.current.set(jobs[i].id, { file: f, folderId: where.get(relDirOf(f))! }));
+      setUploads((u) => {
+        for (const j of u) if (j.state === 'done') sources.current.delete(j.id);
+        return [...u.filter((j) => j.state !== 'done'), ...jobs];
+      });
+      const ok = await runJobs(jobs.map((j) => j.id));
       if (ok) toast(ok === 1 ? 'Uploaded 1 file' : `Uploaded ${ok} files`, { tone: 'ok' });
     },
-    [reload, toast],
+    [reload, toast, foldersFor, runJobs],
   );
+
+  const uploadsRef = useRef(uploads);
+  uploadsRef.current = uploads;
+  const retryUploads = useCallback(() => {
+    const ids = uploadsRef.current.filter((j) => j.state === 'failed' && sources.current.has(j.id)).map((j) => j.id);
+    if (!ids.length) return;
+    setUploads((u) => u.map((j) => (ids.includes(j.id) ? { ...j, state: 'waiting', pct: 0, error: undefined } : j)));
+    void runJobs(ids).then((ok) => ok && toast(ok === 1 ? 'Uploaded 1 file' : `Uploaded ${ok} files`, { tone: 'ok' }));
+  }, [runJobs, toast]);
 
   const replaceFile = useCallback(
     async (asset: Asset, file: File) => {
@@ -310,7 +414,7 @@ export function StoreProvider({ me: meProp, onSignOut, children }: { me: Me; onS
         toast(errText(e), { tone: 'err' });
       }
     },
-    [reload, toast],
+    [reload, toast, patchJob],
   );
 
   const sharedWith = useCallback(
@@ -366,7 +470,12 @@ export function StoreProvider({ me: meProp, onSignOut, children }: { me: Me; onS
     uploads,
     upload,
     replaceFile,
-    clearUploads: () => setUploads((u) => u.filter((j) => j.state === 'working' || j.state === 'waiting')),
+    clearUploads: () =>
+      setUploads((u) => {
+        for (const j of u) if (j.state !== 'working' && j.state !== 'waiting') sources.current.delete(j.id);
+        return u.filter((j) => j.state === 'working' || j.state === 'waiting');
+      }),
+    retryUploads,
     run,
     canEdit: me.role !== 'viewer',
     isOwner: me.role === 'owner' || me.role === 'superadmin',
@@ -428,7 +537,10 @@ async function filesFrom(dt: DataTransfer): Promise<File[]> {
   const walk = async (e: FileSystemEntry): Promise<void> => {
     if (e.isFile) {
       const f = await new Promise<File>((res, rej) => (e as FileSystemFileEntry).file(res, rej));
-      if (!f.name.startsWith('.')) out.push(f);
+      if (f.name.startsWith('.')) return;
+      // "/Raya/Posters/a.jpg" → "Raya/Posters": the folders it came in are made too
+      relDirs.set(f, e.fullPath.split('/').filter(Boolean).slice(0, -1).join('/'));
+      out.push(f);
     } else if (e.isDirectory) {
       const reader = (e as FileSystemDirectoryEntry).createReader();
       for (;;) {

@@ -413,7 +413,7 @@ const HIDE_AFTER = 4000;
  * pauses it), then slides away by itself. Failed uploads keep it open so they can be seen.
  */
 export function UploadTray() {
-  const { uploads, clearUploads } = useStore();
+  const { uploads, clearUploads, retryUploads } = useStore();
   const [open, setOpen] = useState(true);
   const [leaving, setLeaving] = useState(false);
   const [hover, setHover] = useState(false);
@@ -442,16 +442,48 @@ export function UploadTray() {
     const t = setTimeout(() => (setLeaving(false), clearUploads()), 500);
     return () => clearTimeout(t);
   }, [leaving, clearUploads]);
+  // by size, so one big video doesn't count the same as one small picture
+  const total = uploads.reduce((n, u) => n + u.size, 0) || 1;
+  const sent = uploads.reduce((n, u) => n + (u.size * (u.state === 'failed' ? 0 : u.pct)) / 100, 0);
+  // speed over the last few seconds → time left
+  const marks = useRef<{ t: number; b: number }[]>([]);
+  const [rate, setRate] = useState(0);
+  const sentRef = useRef(sent);
+  sentRef.current = sent;
+  useEffect(() => {
+    if (!busy) return void (marks.current = []);
+    const tick = () => {
+      const m = marks.current;
+      m.push({ t: Date.now(), b: sentRef.current });
+      while (m.length > 2 && m[0].t < Date.now() - 8000) m.shift();
+      const dt = (m[m.length - 1].t - m[0].t) / 1000;
+      setRate(dt >= 1 ? Math.max(0, (m[m.length - 1].b - m[0].b) / dt) : 0);
+    };
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, [busy > 0]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!uploads.length) return null;
-  const pct = Math.round(uploads.reduce((n, u) => n + u.pct, 0) / uploads.length);
+  const pct = Math.min(100, Math.round((sent / total) * 100));
+  const done = uploads.filter((u) => u.state === 'done').length;
+  const secs = rate > 0 ? (total - sent) / rate : 0;
+  const eta = !rate ? '' : secs < 50 ? ' · under a minute left' : secs < 3300 ? ` · about ${Math.round(secs / 60) || 1} min left` : ` · about ${(secs / 3600).toFixed(1)} h left`;
+  // a big batch: what's going on now first, and not hundreds of rows at once
+  const order = { working: 0, failed: 1, waiting: 2, done: 3 } as const;
+  const rows = uploads.length > 60 ? [...uploads].sort((a, b) => order[a.state] - order[b.state]).slice(0, 60) : uploads;
   return (
     <div className={`tray${leaving ? ' leaving' : ''}`} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
       <header onClick={() => setOpen((v) => !v)}>
         <div className="tray-ring" style={{ ['--p' as string]: `${busy ? pct : 100}%` }}>{busy ? '' : <ICheck />}</div>
         <div>
-          <strong>{busy ? `Uploading ${busy} ${busy === 1 ? 'file' : 'files'}…` : failed ? `${failed} upload${failed === 1 ? '' : 's'} failed` : 'Uploads complete'}</strong>
-          <small>{busy ? `${pct}%` : `${uploads.length - failed} of ${uploads.length} done`}</small>
+          <strong>{busy ? (uploads.length === 1 ? 'Uploading 1 file…' : `Uploading ${done + 1 > uploads.length ? uploads.length : done + 1} of ${uploads.length}…`) : failed ? `${failed} upload${failed === 1 ? '' : 's'} failed` : 'Uploads complete'}</strong>
+          <small>{busy ? `${pct}%${rate ? ` · ${fmtSize(rate)}/s` : ''}${eta}` : `${uploads.length - failed} of ${uploads.length} done`}</small>
         </div>
+        {!busy && failed > 0 && (
+          <button className="tray-retry" onClick={(e) => (e.stopPropagation(), retryUploads())}>
+            Try again
+          </button>
+        )}
         {!busy && (
           <button className="icon-btn" aria-label="Close" onClick={(e) => (e.stopPropagation(), setLeaving(true))}>
             <IX />
@@ -460,7 +492,7 @@ export function UploadTray() {
       </header>
       {open && (
         <ul>
-          {uploads.map((u) => (
+          {rows.map((u) => (
             <li key={u.id} className={u.state}>
               <span className="tray-name" title={u.error || u.name}>
                 {u.name}
@@ -471,6 +503,7 @@ export function UploadTray() {
               </span>
             </li>
           ))}
+          {uploads.length > rows.length && <li className="tray-more">and {uploads.length - rows.length} more</li>}
         </ul>
       )}
       {/* the time left, as a thin bar running down */}

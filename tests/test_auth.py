@@ -36,7 +36,8 @@ def test_login_cookie_and_hashed_session(app, client):
     rows = sql(app, "SELECT id FROM sessions")
     assert len(rows) == 1 and rows[0]["id"] == hashlib.sha256(token.encode()).hexdigest() and token not in str(rows)
     me = client.get("/api/auth/me").get_json()["user"]
-    assert me == {"id": me["id"], "username": "owner1", "name": "Owner1", "role": "owner", "lang": None}
+    assert me.pop("powers")["manageOwners"] is True  # no Super admin yet: Owners have her powers
+    assert me == {"id": me["id"], "username": "owner1", "name": "Owner1", "role": "owner", "avatarKey": None}
 
 
 def test_secure_cookie_in_production(app, client):

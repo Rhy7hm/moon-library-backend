@@ -2,7 +2,8 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { fileUrl, mainFile, nameOf, titleOf, type Asset, type Folder } from './api';
 import { fmtDate, fmtSize, matchesType, typeOf, type TypeFilter } from './format';
-import { IClock, IDownload, IFolder, IGrid, IList, IMove, IPencil, IPin, IPinOff, IPlus, ISearch, IShare, ITag, ITrash, IUpload, IX } from './icons';
+import { canConvert, ConvertDialog } from './convert';
+import { IClock, IDownload, IFolder, IGrid, IList, IMove, IPencil, IPin, IPinOff, IPlus, IReplace, ISearch, IShare, ITag, ITrash, IUpload, IX } from './icons';
 import { ClientAvatar, ShareWithClients } from './clients';
 import { useFileDrop, useStore } from './store';
 import { isEmpty, KIND_LABEL, KIND_QUERY, matches, parse, withFilter, without, type Token } from './search';
@@ -59,6 +60,7 @@ type Ask =
   | { kind: 'move'; itemIds: string[]; folderIds: string[] }
   | { kind: 'share'; target: 'folder' | 'item'; id: string; ids?: string[]; label: string }
   | { kind: 'tag'; itemIds: string[] }
+  | { kind: 'convert'; assets: Asset[] }
   | null;
 
 /** The ••• menus for files and folders, and the dialogs they open (also used on the client page). */
@@ -75,6 +77,7 @@ export function useActions() {
   const assetMenu = (a: Asset): MenuItem[] => [
     { label: 'Open', icon: <IFolder />, onClick: () => s.openSheet(a.id) },
     { label: 'Download', icon: <IDownload />, onClick: () => download(a) },
+    ...(canConvert(a) ? ([{ label: 'Convert…', icon: <IReplace />, onClick: () => setAsk({ kind: 'convert', assets: [a] }) }] as MenuItem[]) : []),
     ...(s.canEdit
       ? ([
           'sep',
@@ -145,6 +148,8 @@ export function useActions() {
       />
     ) : ask?.kind === 'share' ? (
       <ShareWithClients kind={ask.target} id={ask.id} ids={ask.ids} label={ask.label} onClose={() => setAsk(null)} />
+    ) : ask?.kind === 'convert' ? (
+      <ConvertDialog assets={ask.assets} onClose={() => setAsk(null)} />
     ) : ask?.kind === 'tag' ? (
       <TagDialog itemIds={ask.itemIds} onClose={() => setAsk(null)} />
     ) : null;
@@ -300,6 +305,11 @@ function FileGrid({ assets, showWhere, empty }: { assets: Asset[]; showWhere?: b
           <Button size="sm" icon={<IDownload />} onClick={() => (selected.length === 1 ? download(selected[0]) : downloadZip(selected))}>
             {selected.length === 1 ? 'Download' : 'Download ZIP'}
           </Button>
+          {selected.some(canConvert) && (
+            <Button size="sm" icon={<IReplace />} title="Download in another format or size, or as one PDF" onClick={() => setAsk({ kind: 'convert', assets: selected })}>
+              Convert
+            </Button>
+          )}
           {s.canEdit && (
             <>
               <Button size="sm" icon={<ITag />} onClick={() => setAsk({ kind: 'tag', itemIds: selected.map((a) => a.id) })}>
