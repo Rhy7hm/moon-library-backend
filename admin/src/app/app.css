@@ -911,7 +911,7 @@ section { margin-bottom: 28px; }
 .nav-main:active { transform: none; } /* the icon does the press feedback (GSAP) */
 /* the scale is GSAP's; hover only nudges it up, so the two never fight */
 .nav-main:hover .nav-icon { translate: 0 -1px; }
-.nav-3d { height: 36px; gap: 11px; }
+.nav-3d { height: 38px; gap: 12px; }
 .nav-3d .nav-icon { width: 26px; height: 26px; }
 .nav-3d img { width: 26px; height: 26px; object-fit: contain; filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.18)); transition: filter var(--t) var(--ease); }
 .nav-3d:hover .nav-icon { translate: 0 -1.5px; }
@@ -1394,3 +1394,157 @@ body.is-moving .folder:not(.drop-on) { box-shadow: inset 0 0 0 1.5px color-mix(i
 .sheet-nav .icon-btn:disabled { opacity: 0.3; cursor: default; }
 @media (max-width: 720px) { .zoom { display: none; } }
 @media (prefers-reduced-motion: reduce) { .thumb-img { transition: none; } }
+
+/* ============================================================================================
+   fx — pointer-driven polish. fx.ts eases the values every frame and writes transforms itself, so
+   nothing it drives has a CSS transition here (one would restart on every mouse move and stutter).
+   "html.fx" = a mouse or trackpad, and motion allowed.
+   ============================================================================================ */
+
+/* ---- sidebar: the places near the pointer grow like the macOS Dock; a highlight glides between them */
+.side .nav { position: relative; }
+.nav-glide {
+  position: absolute; left: 0; right: 0; top: 0; height: var(--gh, 32px); transform: translate3d(0, var(--gy, 0px), 0); opacity: var(--go, 0); z-index: 0; pointer-events: none;
+  border-radius: var(--r-sm); background: var(--hover); will-change: transform, opacity;
+  transition: transform 0.26s cubic-bezier(0.2, 0.9, 0.3, 1), opacity 0.18s linear;
+}
+.side .nav .nav-item { position: relative; z-index: 1; }
+html.fx .side .nav .nav-item:hover:not(.on) { background: none; } /* the gliding highlight does this */
+html.fx .side .nav .nav-item > svg:first-child,
+html.fx .side .nav .nav-item > .nav-icon { transition: none; will-change: scale; }
+html.fx .nav-main:hover .nav-icon, html.fx .nav-3d:hover .nav-icon { translate: none; }
+
+/* ---- cards: fx.ts lifts and tilts them; the light is a layer that only slides (no repainting) */
+html.fx .card { transition: box-shadow var(--t) var(--spring); }
+html.fx .card:hover { transform: none; box-shadow: var(--shadow-raise); }
+html.fx .card:active { transform: none; }
+html.fx .card.selected:hover { box-shadow: 0 0 0 2.5px var(--accent), var(--shadow-raise); }
+html.fx .card:hover .thumb-img { transform: none; }
+.card-glare {
+  position: absolute; left: -50%; top: -50%; width: 200%; height: 200%; z-index: 1; pointer-events: none; opacity: 0;
+  background: radial-gradient(closest-side, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.06) 45%, transparent 70%);
+}
+html.fx .card-media .check, html.fx .card-media .badges { z-index: 2; }
+
+/* ---- the main button leans toward the pointer (fx.ts sets its translate each frame) */
+
+/* ---- menus pop out of their button with a little spring */
+.menu { animation: menu-pop 0.26s cubic-bezier(0.25, 1.25, 0.5, 1); -webkit-backdrop-filter: none; backdrop-filter: none; will-change: transform, opacity; }
+@keyframes menu-pop { from { opacity: 0; transform: scale(0.9) translate3d(0, -4px, 0); } }
+.menu.floating.up { animation-name: menu-pop-up; }
+@keyframes menu-pop-up { from { opacity: 0; transform: scale(0.9) translate3d(0, 4px, 0); } }
+
+/* ---- a new page fades in (opacity only: cheap, and nothing inside it is displaced) */
+.page { animation: page-in 0.2s linear; }
+@keyframes page-in { from { opacity: 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .menu, .page { animation: none; }
+  .nav-glide { transition: none; }
+}
+
+/* the dashboard's entrance (enter.ts) slides things in from past the window's edge: hold the scrollbars back meanwhile */
+html.entering { overflow: hidden; }
+
+/* the light left by the sign-in page, with its welcome (arrive.ts puts it up, enter.ts plays it) */
+.arrive-sheet { position: fixed; inset: 0; z-index: 2147483000; pointer-events: none; overflow: hidden; }
+.arrive-welcome { position: absolute; left: 50%; top: 42%; width: min(92vw, 980px); transform: translate(-50%, -50%); display: grid; justify-items: center; gap: 16px; text-align: center; color: #2b1a0b; will-change: transform, opacity; }
+.arrive-mark { width: 54px; height: 54px; object-fit: contain; opacity: 0; will-change: transform, opacity; }
+.arrive-eyebrow { font: 600 12.5px/1 var(--font); letter-spacing: 0.24em; text-transform: uppercase; color: #9a6532; opacity: 0; }
+.arrive-name { font: 700 clamp(38px, 7vw, 88px)/1.04 var(--display); letter-spacing: -0.045em; }
+.arrive-word { display: inline-block; overflow: hidden; vertical-align: top; padding-bottom: 0.16em; margin-bottom: -0.16em; }
+.arrive-char { display: inline-block; will-change: transform; } /* hidden by the timeline (enter.ts), not by a CSS transform: GSAP would read that as fixed pixels */
+.arrive-rule { display: block; width: 72px; height: 2px; margin-top: 4px; border-radius: 2px; opacity: 0; transform: scaleX(0); background: linear-gradient(90deg, transparent, #d98a45, transparent); }
+
+/* drag-to-select (marquee.ts): the box, a count on its corner, and no text selecting while it is drawn */
+.marquee {
+  position: fixed; left: 0; top: 0; z-index: 90; pointer-events: none; overflow: hidden; border-radius: 8px;
+  border: 1.5px solid var(--accent); background: color-mix(in srgb, var(--accent) 13%, transparent);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18) inset, 0 6px 24px color-mix(in srgb, var(--accent) 18%, transparent);
+  will-change: transform, width, height; animation: marquee-in 0.12s var(--ease);
+}
+.marquee[data-n]::after {
+  content: attr(data-n); position: absolute; right: 6px; bottom: 6px; padding: 2px 8px; border-radius: 999px;
+  background: var(--accent); color: #fff; font: 650 12px/16px var(--font); font-variant-numeric: tabular-nums;
+}
+@keyframes marquee-in { from { opacity: 0; } }
+body.no-select, body.no-select * { -webkit-user-select: none; user-select: none; }
+@media (prefers-reduced-motion: reduce) { .marquee { animation: none; } }
+
+/* ============================================================================================
+   tag filter (tag-filter.tsx): the toolbar button, its popover, the bar under the toolbar,
+   and the clickable tags on cards
+   ============================================================================================ */
+
+/* the button: same height and look as the other toolbar controls; accent-tinted while a filter is on */
+.tagbtn {
+  display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 10px 0 11px; border: 0; border-radius: var(--r-sm);
+  background: var(--surface); box-shadow: inset 0 0 0 1px var(--line-2); color: var(--ink); font-size: 13px; cursor: pointer;
+  transition: box-shadow var(--t) var(--spring), background var(--t-fast), color var(--t-fast);
+}
+.tagbtn:hover { background: var(--hover); }
+.tagbtn:focus-visible { outline: none; box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 4px var(--accent-soft); }
+.tagbtn > svg:first-child { width: 15px; height: 15px; color: var(--ink-2); }
+.tagbtn-chev { width: 12px; height: 12px; color: var(--ink-3); transition: transform var(--t) var(--spring); }
+.tagbtn.open .tagbtn-chev { transform: rotate(180deg); }
+.tagbtn.on { background: var(--accent-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); color: var(--accent); font-weight: 600; }
+.tagbtn.on > svg:first-child, .tagbtn.on .tagbtn-chev { color: var(--accent); }
+.tagbtn-n { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--accent); color: #fff; font: 650 11px/18px var(--font); text-align: center; font-variant-numeric: tabular-nums; }
+
+/* the popover: on <body>, placed by its button, fully solid so nothing shows through */
+.tagpop {
+  position: fixed; z-index: 1000; width: 300px; display: flex; flex-direction: column; padding: 6px; border-radius: 14px; outline: none;
+  background: var(--surface); box-shadow: var(--shadow-pop), inset 0 0 0 1px var(--line);
+  transform-origin: top left; animation: menu-pop 0.26s cubic-bezier(0.25, 1.25, 0.5, 1);
+}
+.tagpop.up { transform-origin: bottom left; animation-name: menu-pop-up; }
+.tagpop-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px 4px; font-size: 12px; }
+.tagpop-head strong { font-weight: 650; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-3); font-size: 11px; }
+.tagpop-search { display: flex; align-items: center; gap: 8px; height: 34px; margin: 4px 2px 6px; padding: 0 10px; border-radius: 9px; background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--line); cursor: text; }
+.tagpop-search:focus-within { box-shadow: inset 0 0 0 1.5px var(--accent), 0 0 0 3px var(--accent-soft); }
+.tagpop-search svg { width: 15px; height: 15px; color: var(--ink-3); flex: none; }
+.tagpop-search input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; outline: 0; background: none; box-shadow: none; font-size: 13px; color: var(--ink); }
+.tagpop-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 1px; padding: 2px; margin: 0 -2px; }
+.tagpop-row {
+  --t: #8e8e93; display: flex; align-items: center; gap: 10px; flex: none; height: 36px; padding: 0 10px 0 8px; border: 0; border-radius: 9px; background: none; text-align: left; color: var(--ink); font-size: 13.5px; cursor: pointer;
+  animation: menu-item 0.28s var(--spring) backwards; animation-delay: calc(var(--i, 0) * 18ms);
+}
+.tagpop-row.hi { background: var(--hover); }
+.tagpop-row.on { background: color-mix(in srgb, var(--t) 12%, transparent); }
+.tagpop-row.on.hi { background: color-mix(in srgb, var(--t) 18%, transparent); }
+/* a tick box in the tag's own colour: outlined when off, filled with a tick when on */
+.tagpop-check { display: grid; place-items: center; flex: none; width: 18px; height: 18px; border-radius: 6px; color: #fff; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--t) 60%, transparent); transition: background var(--t-fast), box-shadow var(--t-fast); }
+.tagpop-check svg { width: 12px; height: 12px; stroke-width: 3; }
+.tagpop-row.on .tagpop-check { background: var(--t); box-shadow: inset 0 0 0 1.5px var(--t); }
+.tagpop-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tagpop-n { flex: none; min-width: 22px; text-align: right; color: var(--ink-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+.tagpop-row.none { margin-top: 4px; box-shadow: 0 -1px 0 var(--line); border-radius: 0 0 9px 9px; }
+.tagpop-row.none .tagpop-name { color: var(--ink-2); font-style: italic; }
+.tagpop-row.none .tagpop-check { box-shadow: inset 0 0 0 1.5px var(--ink-3); }
+.tagpop-row.none.on .tagpop-check { background: var(--ink-3); box-shadow: inset 0 0 0 1.5px var(--ink-3); }
+.tagpop-empty { margin: 0; padding: 18px 10px; text-align: center; font-size: 13px; color: var(--ink-3); }
+.tagpop-foot { display: flex; align-items: center; gap: 8px; min-height: 40px; margin-top: 4px; padding: 6px 8px 2px; box-shadow: 0 -1px 0 var(--line); font-size: 12px; color: var(--ink-2); }
+.tagpop-hint { color: var(--ink-3); }
+
+/* the bar under the toolbar while a filter is on */
+.tagbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: -4px 0 16px; }
+.tagbar-label { font-size: 12.5px; color: var(--ink-2); }
+.tagbar-item { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; }
+.tagbar-mode { height: 22px; padding: 0 8px; border: 0; border-radius: 999px; background: var(--press); color: var(--ink-2); font-size: 11.5px; font-weight: 600; cursor: pointer; transition: background var(--t-fast), color var(--t-fast); }
+.tagbar-mode:hover { background: var(--accent-soft); color: var(--accent); }
+.tagbar-clear { font-size: 12.5px; margin-left: 2px; }
+.tagbar-count { margin-left: auto; font-size: 12.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+
+/* tags on a card, when they can be clicked */
+.card-tag.pick { border: 0; font-family: inherit; cursor: pointer; transition: background var(--t-fast), box-shadow var(--t-fast), transform var(--t-fast) var(--spring); }
+.card-tag.pick:hover { background: color-mix(in srgb, var(--t) 26%, transparent); }
+.card-tag.pick:active { transform: scale(0.94); }
+.card-tag.pick.on { background: color-mix(in srgb, var(--t) 30%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--t) 55%, transparent); }
+.card-tag.pick:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent); }
+
+@media (pointer: coarse) { .tagpop-row { height: 44px; } .tagbtn { height: 40px; } }
+@media (max-width: 720px) {
+  .tagpop { width: min(300px, calc(100vw - 16px)); }
+  .tagbar-count { margin-left: 0; width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) { .tagpop, .tagpop-row { animation: none; } .tagbtn-chev { transition: none; } }

@@ -1,13 +1,15 @@
 /* The library: folder browser, Recent and search results, all built on one file grid. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { fileUrl, mainFile, nameOf, titleOf, type Asset, type Folder } from './api';
+import { fileUrl, mainFile, nameOf, titleOf, type Asset, type Folder, type Tag } from './api';
 import { fmtDate, fmtSize, matchesType, typeOf, type TypeFilter } from './format';
 import { canConvert, ConvertDialog } from './convert';
 import { IClock, IDownload, IFolder, IGrid, IList, IMove, IPencil, IPin, IPinOff, IPlus, IReplace, ISearch, IShare, ITag, ITrash, IUpload, IX } from './icons';
 import { ClientAvatar, ShareWithClients } from './clients';
+import { useMarquee } from './marquee';
 import { sheetOrder, useFileDrop, useStore } from './store';
 import { isEmpty, KIND_LABEL, KIND_QUERY, matches, parse, withFilter, without, type Token } from './search';
 import { TagDialog, tagQuery } from './tags';
+import { applyTagFilter, NO_TAG_FILTER, tagFilterOn, tagStats, TagFilterBar, TagFilterButton, toggleTagId, type TagFilter } from './tag-filter';
 import { AssetBadges, AssetCard, Button, Crumbs, Empty, FolderPicker, FolderTile, PageHeader, PromptDialog, Segmented, Thumb, TypeIcon, endDrag, startDrag, type MenuItem } from './ui';
 
 type Sort = 'new' | 'old' | 'name' | 'size';
@@ -159,7 +161,7 @@ export function useActions() {
 
 /* ---------------- the file grid ---------------- */
 
-function FileGrid({ assets, showWhere, empty }: { assets: Asset[]; showWhere?: boolean; empty: React.ReactNode }) {
+function FileGrid({ assets, showWhere, empty, tagFilter = true }: { assets: Asset[]; showWhere?: boolean; empty: React.ReactNode; tagFilter?: boolean }) {
   const s = useStore();
   const { assetMenu, setAsk, trashAssets, dialogs } = useActions();
   const [type, setType] = useState<TypeFilter>(() => pref('type', 'all'));
@@ -167,11 +169,27 @@ function FileGrid({ assets, showWhere, empty }: { assets: Asset[]; showWhere?: b
   const [view, setView] = useState<View>(() => pref('view', 'grid'));
   const [sel, setSel] = useState<Set<string>>(new Set());
   const anchor = useRef<string | null>(null);
+  useMarquee(sel, setSel); // drag on empty space to select several at once
   // how big the pictures in the grid are
   const [zoom, setZoom] = useState(() => Number(pref('zoom', '1')));
 
+  // Filter by tag (tag-filter.tsx): the tags used by the files in this view, and what is chosen
+  const [tf, setTf] = useState<TagFilter>(NO_TAG_FILTER);
+  useEffect(() => setTf(NO_TAG_FILTER), [s.route]); // a new place starts unfiltered
+  const { counts: tagCounts, untagged: untaggedCount } = useMemo(() => tagStats(assets), [assets]);
+  const tagOpts = useMemo(
+    () => (tagFilter ? s.tags.filter((x) => tagCounts.has(x.id)).sort((x, y) => x.name.localeCompare(y.name, undefined, { numeric: true })) : []),
+    [tagFilter, s.tags, tagCounts],
+  );
+  // a tag none of these files has any more (they were untagged, or moved) is no longer part of the filter
+  const active: TagFilter = { ids: tf.ids.filter((id) => tagCounts.has(id)), mode: tf.mode, untagged: tf.untagged && untaggedCount > 0 };
+  const activeKey = `${active.ids.join()}|${active.mode}|${active.untagged}`;
+  const pool = useMemo(() => applyTagFilter(assets, active), [assets, activeKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const activeTags = useMemo(() => new Set(active.ids), [activeKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const changeTags = (f: TagFilter) => (setTf(f), setSel(new Set()));
+
   const shown = useMemo(() => {
-    const list = assets.filter((a) => matchesType(a, type));
+    const list = pool.filter((a) => matchesType(a, type));
     const by = {
       new: (a: Asset, b: Asset) => b.date - a.date,
       old: (a: Asset, b: Asset) => a.date - b.date,
@@ -179,16 +197,16 @@ function FileGrid({ assets, showWhere, empty }: { assets: Asset[]; showWhere?: b
       size: (a: Asset, b: Asset) => (mainFile(b)?.size ?? 0) - (mainFile(a)?.size ?? 0),
     }[sort];
     return [...list].sort(by);
-  }, [assets, type, sort]);
+  }, [pool, type, sort]);
 
   const counts = useMemo(() => {
-    const c: Record<string, number> = { all: assets.length, image: 0, video: 0, document: 0, design: 0 };
-    for (const a of assets) {
+    const c: Record<string, number> = { all: pool.length, image: 0, video: 0, document: 0, design: 0 };
+    for (const a of pool) {
       const t = typeOf(mainFile(a));
       if (t in c) c[t]++;
     }
     return c;
-  }, [assets]);
+  }, [pool]);
 
   const toggle = (id: string, e?: React.MouseEvent) => {
     setSel((cur) => {
@@ -252,6 +270,12 @@ function FileGrid({ assets, showWhere, empty }: { assets: Asset[]; showWhere?: b
   // dragging a selected card takes the whole selection along
   const drag = (a: Asset) => (s.canEdit ? (e: React.DragEvent) => startDrag(e, { items: sel.has(a.id) ? selected.map((x) => x.id) : [a.id], folders: [] }) : undefined);
 
+  const tagWords = !tagFilterOn(active)
+    ? ''
+    : active.untagged
+      ? ' without tags'
+      : ` tagged ${active.ids.map((id) => `“${s.tagById.get(id)?.name ?? ''}”`).join(active.mode === 'all' ? ' and ' : ' or ')}`;
+
   const typeOpts: { value: TypeFilter; label: string }[] = [
     { value: 'all', label: `All` },
     { value: 'image', label: 'Images' },
@@ -271,6 +295,7 @@ function FileGrid({ assets, showWhere, empty }: { assets: Asset[]; showWhere?: b
             options={typeOpts.map((o) => ({ value: o.value, label: <>{o.label} <i className="count">{counts[o.value]}</i></> }))}
           />
           <div className="toolbar-right">
+            {tagOpts.length > 0 && <TagFilterButton tags={tagOpts} counts={tagCounts} untagged={untaggedCount} value={active} onChange={changeTags} />}
             <select className="select" value={sort} aria-label="Sort" onChange={(e) => (setSort(e.target.value as Sort), save('sort', e.target.value))}>
               <option value="new">Newest first</option>
               <option value="old">Oldest first</option>
@@ -303,12 +328,29 @@ function FileGrid({ assets, showWhere, empty }: { assets: Asset[]; showWhere?: b
         </div>
       )}
 
+      {tagFilterOn(active) && (
+        <TagFilterBar
+          tags={active.ids.map((id) => s.tagById.get(id)).filter((x): x is Tag => !!x)}
+          value={active}
+          onChange={changeTags}
+          count={pool.length}
+          total={assets.length}
+        />
+      )}
+
       {!shown.length ? (
-        assets.length ? <p className="muted pad">No {typeOpts.find((o) => o.value === type)!.label.toLowerCase()} here.</p> : empty
+        assets.length ? (
+          <p className="muted pad">
+            No {type === 'all' ? 'files' : typeOpts.find((o) => o.value === type)!.label.toLowerCase()}
+            {tagWords} here.
+          </p>
+        ) : (
+          empty
+        )
       ) : view === 'grid' ? (
         <div className={`grid zoom-${zoom}`} key={type + sort}>
           {visible.map((a) => (
-            <AssetCard key={a.id} asset={a} selected={sel.has(a.id)} selecting={sel.size > 0} onToggle={(e) => toggle(a.id, e)} onOpen={() => open(a)} menu={assetMenu(a)} where={where(a)} onDragStart={drag(a)} />
+            <AssetCard key={a.id} asset={a} selected={sel.has(a.id)} selecting={sel.size > 0} onToggle={(e) => toggle(a.id, e)} onOpen={() => open(a)} menu={assetMenu(a)} where={where(a)} onDragStart={drag(a)} onTag={tagFilter ? (id) => changeTags(toggleTagId(active, id)) : undefined} activeTags={activeTags} />
           ))}
         </div>
       ) : (
@@ -326,6 +368,7 @@ function FileGrid({ assets, showWhere, empty }: { assets: Asset[]; showWhere?: b
               <div
                 key={a.id}
                 className={`tr${sel.has(a.id) ? ' selected' : ''}`}
+                data-asset={a.id}
                 role="row"
                 onClick={(e) => (sel.size || e.metaKey || e.ctrlKey || e.shiftKey ? toggle(a.id, e) : open(a))}
                 draggable={s.canEdit}
@@ -631,7 +674,7 @@ export function SearchPage({ q }: { q: string }) {
           </div>
         </section>
       )}
-      <FileGrid assets={list} showWhere empty={any && !folders.length ? <Empty icon={<ISearch />} title="Nothing matches" text="Take a filter off, or try another word." /> : null} />
+      <FileGrid assets={list} showWhere tagFilter={false} empty={any && !folders.length ? <Empty icon={<ISearch />} title="Nothing matches" text="Take a filter off, or try another word." /> : null} />
       {dialogs}
     </div>
   );

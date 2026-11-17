@@ -140,6 +140,8 @@ export function StoreProvider({ me: meProp, onSignOut, children }: { me: Me; onS
   const [clients, setClients] = useState<Client[]>([]);
   const [trashClients, setTrashClients] = useState<Client[]>([]); // removed clients, in the Trash
   const [route, setRoute] = useState<Route>(() => parseRoute(location.hash));
+  const routeRef = useRef(route);
+  useEffect(() => void (routeRef.current = route), [route]);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [sheet, setSheet] = useState<string | null>(null);
   const [uploads, setUploads] = useState<UploadJob[]>([]);
@@ -177,7 +179,12 @@ export function StoreProvider({ me: meProp, onSignOut, children }: { me: Me; onS
 
   useEffect(() => {
     reload();
-    const onHash = () => setRoute(parseRoute(location.hash));
+    // back / forward (our own navigation has already set the route by the time this fires)
+    const onHash = () => {
+      const next = parseRoute(location.hash);
+      if (routeHash(next) === routeHash(routeRef.current)) return;
+      setRoute(next);
+    };
     window.addEventListener('hashchange', onHash);
     // keep in step when colleagues change things (and when the tab comes back)
     const onFocus = () => document.visibilityState === 'visible' && reload();
@@ -190,6 +197,7 @@ export function StoreProvider({ me: meProp, onSignOut, children }: { me: Me; onS
 
   const go = useCallback((r: Route) => {
     const h = routeHash(r);
+    routeRef.current = r;
     if (location.hash !== h) location.hash = h;
     setRoute(r);
     setSheet(null);

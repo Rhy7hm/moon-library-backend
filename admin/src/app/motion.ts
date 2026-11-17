@@ -8,6 +8,9 @@ import { gsap } from 'gsap';
 
 export { gsap };
 
+// dev only: lets the browser console (and tests) drive the timeline
+if (import.meta.env.DEV) (window as unknown as { gsap: typeof gsap }).gsap = gsap;
+
 /** false when the person asked their computer for less motion; animations then jump straight to the end. */
 export const motionOK = () => !matchMedia('(prefers-reduced-motion: reduce)').matches;
 

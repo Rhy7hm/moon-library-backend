@@ -582,6 +582,8 @@ export function AssetCard({
   menu,
   where,
   onDragStart,
+  onTag,
+  activeTags,
 }: {
   asset: Asset;
   selected: boolean;
@@ -592,13 +594,20 @@ export function AssetCard({
   where?: string;
   /** set to let the card be dragged onto a folder */
   onDragStart?: (e: React.DragEvent) => void;
+  /** set to make the tags on the card clickable (they add or remove that tag from the filter) */
+  onTag?: (tagId: string) => void;
+  /** the tags in the filter now: shown first and highlighted */
+  activeTags?: Set<string>;
 }) {
   const f = mainFile(asset);
   const { tagById } = useStore();
-  const tags = (asset.tags ?? []).map((id) => tagById.get(id)).filter((t): t is NonNullable<typeof t> => !!t);
+  const all = (asset.tags ?? []).map((id) => tagById.get(id)).filter((t): t is NonNullable<typeof t> => !!t);
+  // the tags being filtered on come first, so the card shows why it's here
+  const tags = activeTags?.size ? [...all].sort((a, b) => Number(activeTags.has(b.id)) - Number(activeTags.has(a.id))) : all;
   return (
     <div
       className={`card${selected ? ' selected' : ''}`}
+      data-asset={asset.id}
       tabIndex={0}
       onClick={(e) => (selecting || e.metaKey || e.ctrlKey || e.shiftKey ? onToggle(e) : onOpen())}
       onKeyDown={(e) => (e.key === 'Enter' ? onOpen() : e.key === ' ' && (e.preventDefault(), onToggle(e as unknown as React.MouseEvent)))}
@@ -609,6 +618,7 @@ export function AssetCard({
       <div className="card-media">
         <Thumb asset={asset} />
         <AssetBadges asset={asset} />
+        <i className="card-glare" aria-hidden />
         <button
           type="button"
           className="check"
@@ -629,11 +639,26 @@ export function AssetCard({
         </div>
         {tags.length > 0 && (
           <div className="card-tags">
-            {tags.slice(0, 2).map((t) => (
-              <span key={t.id} className="card-tag" style={{ ['--t' as string]: t.color || '#8e8e93' }}>
-                {t.name}
-              </span>
-            ))}
+            {tags.slice(0, 2).map((t) =>
+              onTag ? (
+                <button
+                  key={t.id}
+                  type="button"
+                  className={`card-tag pick${activeTags?.has(t.id) ? ' on' : ''}`}
+                  style={{ ['--t' as string]: t.color || '#8e8e93' }}
+                  title={activeTags?.has(t.id) ? `Stop filtering by “${t.name}”` : `Show only files tagged “${t.name}”`}
+                  aria-pressed={!!activeTags?.has(t.id)}
+                  onClick={(e) => (e.stopPropagation(), onTag(t.id))}
+                  onKeyDown={(e) => e.stopPropagation()}
+                >
+                  {t.name}
+                </button>
+              ) : (
+                <span key={t.id} className="card-tag" style={{ ['--t' as string]: t.color || '#8e8e93' }}>
+                  {t.name}
+                </span>
+              ),
+            )}
             {tags.length > 2 && <span className="card-tag more">+{tags.length - 2}</span>}
           </div>
         )}

@@ -13,6 +13,8 @@ import { Spotlight } from './spotlight';
 import { ClientPage, ClientsPage } from './clients';
 import { useStore, type Route } from './store';
 import { GlobalDrop } from './upload-to';
+import { enter } from './enter';
+import { startFx } from './fx';
 import { gsap, pop, settle } from './motion';
 import { useTheme } from './theme';
 import { MenuButton, Toasts, UploadTray, UserAvatar, useMoveDrop } from './ui';
@@ -291,6 +293,14 @@ export function Shell({ onSignedOut }: { onSignedOut: () => void }) {
     setMenu(false);
   }, [r]);
   const nav = (to: Route) => () => s.go(to);
+  // the Dock-like sidebar, tilting cards and leaning buttons (fx.ts)
+  useEffect(() => startFx(), []);
+  // the dashboard comes in (enter.ts) once the library has loaded
+  const appRef = useRef<HTMLDivElement>(null);
+  const loaded = !!s.tree;
+  useLayoutEffect(() => {
+    if (loaded && appRef.current) enter(appRef.current, s.me.name);
+  }, [loaded]);
   const signOut = async () => {
     await logout().catch(() => null);
     onSignedOut();
@@ -305,7 +315,7 @@ export function Shell({ onSignedOut }: { onSignedOut: () => void }) {
   }
 
   return (
-    <div className={`app${menu ? ' menu-open' : ''}`}>
+    <div className={`app${menu ? ' menu-open' : ''}`} ref={appRef}>
       <aside className="side">
         <div className="brand">
           <span className="brand-mark">
@@ -314,6 +324,7 @@ export function Shell({ onSignedOut }: { onSignedOut: () => void }) {
           <span>Moon Library</span>
         </div>
         <nav className="nav" aria-label="Main">
+          <i className="nav-glide" aria-hidden />
           <NavMain src="home" icon={<IHome />} label="Home" active={r.page === 'home'} onClick={nav({ page: 'home' })} />
           <NavMain src="collection" icon={<IFolder />} label="Library" active={r.page === 'folder' && !r.id} onClick={nav({ page: 'folder', id: null })} />
           <NavMain src="recent" icon={<IClock />} label="Recent" active={r.page === 'recent'} onClick={nav({ page: 'recent' })} />
@@ -329,6 +340,7 @@ export function Shell({ onSignedOut }: { onSignedOut: () => void }) {
           {!s.children(null).length && <p className="side-empty">No folders yet</p>}
         </div>
         <nav className={`nav bottom manage${manageOpen ? ' open' : ''}`} aria-label="Manage">
+          <i className="nav-glide" aria-hidden />
           <button className={`nav-item manage-toggle${manageActive && !manageOpen ? ' on' : ''}`} aria-expanded={manageOpen} onClick={() => toggleManage()}>
             <IGrid />
             <span>Manage</span>

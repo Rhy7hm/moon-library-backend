@@ -206,22 +206,83 @@ canvas.stars { position: absolute; inset: 0; width: 100%; height: 100%; pointer-
 .mark { width: 30px; height: 30px; display: inline-block; flex: none; background: url(/favicon.png) center / contain no-repeat; }
 
 
-/* the sign-in page: plain, like the admin's own — a soft wash of the accent colour and one card */
-.auth {
-  min-height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; padding: 24px 16px;
-  background: radial-gradient(1000px 520px at 50% -10%, color-mix(in srgb, var(--accent) 10%, var(--canvas)), var(--canvas));
+/* the sign-in page, "Moonrise": always night — a large turning moon behind a dark glass card (SignIn.tsx).
+   Everything that moves is a transform or an opacity on its own layer; nothing here is blurred live. */
+.auth.si {
+  /* night colours, whatever the device theme */
+  --canvas: #000; --surface: rgba(255, 255, 255, 0.06); --surface-2: rgba(255, 255, 255, 0.1); --ink: #f5f5f7; --ink-2: rgba(255, 255, 255, 0.74); --ink-3: rgba(255, 255, 255, 0.5);
+  --line: rgba(255, 255, 255, 0.1); --line-2: rgba(255, 255, 255, 0.16); --accent: #ffb36b; --accent-soft: rgba(255, 179, 107, 0.18); --danger: #ff6b61;
+  position: relative; isolation: isolate; overflow: hidden; min-height: 100dvh; display: flex; flex-direction: column; color: var(--ink); color-scheme: dark;
+  background: radial-gradient(70% 90% at 73% 50%, #1a130d 0%, #060504 55%, #000 100%);
 }
-.auth-card { width: 100%; max-width: 380px; padding: 32px 28px 24px; border-radius: 24px; background: var(--surface); box-shadow: var(--shadow-2), 0 0 0 1px var(--line); display: flex; flex-direction: column; }
-.auth-mark { display: grid; place-items: center; width: 52px; height: 52px; margin-bottom: 18px; }
-.auth-mark img { width: 100%; height: 100%; object-fit: contain; display: block; }
-.auth-card h1 { margin: 0; font: 700 24px/1.15 var(--display); letter-spacing: -0.028em; }
-.auth-card > p.muted { margin: 4px 0 22px; font-size: 14px; }
-.auth-card .field { margin-bottom: 14px; }
-.auth-card .pw-wrap button { background: var(--surface-2); color: var(--ink-2); }
-.auth-btn { width: 100%; height: 42px; margin-top: 4px; justify-content: center; }
+.si-sky { position: absolute; inset: -24px; z-index: -3; will-change: transform; }
+.si-glow { position: absolute; border-radius: 50%; pointer-events: none; will-change: transform; }
+.si-glow.g1 { width: 60vmax; aspect-ratio: 1; left: -26vmax; top: -24vmax; background: radial-gradient(circle, rgba(255, 255, 255, 0.05), transparent 66%); }
+.si-glow.g2 { width: 46vmax; aspect-ratio: 1; right: -12vmax; top: -20vmax; background: radial-gradient(circle, rgba(255, 150, 80, 0.1), transparent 66%); }
+
+/* the moon (ui/MineralMoon.tsx): big, on the right, with a warm halo. --d = its diameter. */
+.si-moon { --d: min(86vh, 54vw); position: absolute; z-index: -2; right: 5vw; top: 50%; margin-top: calc(var(--d) / -2); width: var(--d); height: var(--d); pointer-events: none; will-change: transform; }
+.si-moon-lean { position: absolute; inset: 0; will-change: transform; }
+.mm { position: absolute; inset: 0; will-change: transform; }
+.mm canvas { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; } /* faded in by MineralMoon.tsx */
+/* the halo: three soft layers (resting, warmed by typing, flushed red by a wrong password) */
+.mm-halo { position: absolute; inset: 0; border-radius: 50%; will-change: opacity; transition: opacity 0.7s var(--ease); opacity: 0.85;
+  box-shadow: 0 0 40px 6px rgba(255, 244, 228, 0.7), 0 0 120px 44px rgba(255, 198, 134, 0.4), 0 0 260px 110px rgba(255, 150, 70, 0.18); }
+.mm.over .mm-halo:not(.hot):not(.bad) { opacity: 1; }
+.mm-halo.hot { opacity: 0; transition: none; box-shadow: 0 0 60px 14px rgba(255, 250, 240, 0.85), 0 0 180px 72px rgba(255, 208, 146, 0.5), 0 0 380px 150px rgba(255, 150, 70, 0.28); }
+.mm-halo.bad { opacity: 0; transition: none; box-shadow: 0 0 60px 14px rgba(255, 120, 110, 0.65), 0 0 190px 76px rgba(230, 40, 60, 0.32); }
+
+/* signed in: the moon's light spreads over the whole screen (an iris from SignIn.tsx), and the next page fades in from it */
+.si-dawn { position: absolute; inset: 0; z-index: 5; opacity: 0; pointer-events: none; background: #fff1dc; }
+/* the sign-in button: it narrows to a round loader, then a tick (SignIn.tsx) */
+.si-submit { align-self: center; will-change: width; }
+/* the bloom when you sign in: rings and sparks from the moon's edge (made by SignIn.tsx) */
+.si-bloom { position: absolute; z-index: 1; width: 0; height: 0; pointer-events: none; }
+.si-ring { position: absolute; left: 0; top: 0; border-radius: 50%; border: 2px solid rgba(255, 226, 186, 0.9); box-shadow: 0 0 24px rgba(255, 190, 120, 0.7), inset 0 0 24px rgba(255, 190, 120, 0.45); opacity: 0; will-change: transform, opacity; }
+.si-spark { position: absolute; left: 0; top: 0; border-radius: 50%; background: #fff3dc; box-shadow: 0 0 10px 2px rgba(255, 196, 130, 0.9); opacity: 0; will-change: transform, opacity; }
+.si-btn-label { display: inline-flex; align-items: center; gap: 8px; }
+.si-btn-spin { position: absolute; left: 50%; top: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%; border: 2.5px solid rgba(26, 13, 4, 0.22); border-top-color: #1a0d04; }
+.si-submit .si-btn-check { position: absolute; left: 50%; top: 50%; width: 26px; height: 26px; margin: -13px 0 0 -13px; }
+.si-btn-check path { fill: none; stroke: #1a0d04; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+.si-submit:hover .si-btn-label svg { transform: translateX(3px); }
+
+.si-brand { display: flex; align-items: center; gap: 10px; padding: 22px clamp(20px, 7vw, 120px) 0; font: 650 15px/1 var(--display); letter-spacing: -0.02em; }
+.si-brand img { width: 28px; height: 28px; object-fit: contain; }
+.si-main { flex: 1; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 26px; width: 100%; margin: 0; padding: 2vh clamp(20px, 7vw, 120px) 6vh; text-align: left; }
+.si-title { margin: 0; font: 700 clamp(40px, 5.4vw, 72px)/0.98 var(--display); letter-spacing: -0.05em; text-wrap: balance; }
+.si-title .w { display: inline-block; will-change: transform, opacity; }
+/* the mask (overflow: clip) around each line gets room below, so the tails of g, y and p aren't cut off */
+.si-title > div { padding-bottom: 0.16em; margin-bottom: -0.16em; }
+.si-lede { margin: 14px 0 0; max-width: 460px; font-size: clamp(16px, 1.5vw, 20px); color: rgba(255, 255, 255, 0.62); }
+
+/* dark glass: a tinted sheet with a lit edge. No live blur behind it, so the sky can keep moving for free. */
+.si .auth-card {
+  position: relative; overflow: hidden; width: 100%; max-width: 400px; padding: 28px 26px 22px; border-radius: 26px; display: flex; flex-direction: column;
+  background: linear-gradient(160deg, rgba(38, 35, 32, 0.84), rgba(11, 10, 9, 0.92));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 30px 80px rgba(0, 0, 0, 0.45);
+}
+.si .auth-card > :not(.si-sheen) { position: relative; }
+/* a soft light that follows the pointer over the card (it only slides: no repainting) */
+.si-sheen { position: absolute; left: 50%; top: 50%; width: 520px; height: 520px; margin: -260px 0 0 -260px; border-radius: 50%; pointer-events: none; will-change: transform; background: radial-gradient(closest-side, rgba(255, 200, 150, 0.13), transparent); }
+.si .auth-card h2 { margin: 0; font: 700 22px/1.15 var(--display); letter-spacing: -0.028em; }
+.si .auth-card > p.muted { margin: 4px 0 20px; font-size: 14px; }
+.si .auth-card .field { margin-bottom: 14px; }
+.si .auth-card .input { background: rgba(255, 255, 255, 0.06); color: var(--ink); }
+.si .auth-card .input::placeholder { color: rgba(255, 255, 255, 0.32); }
+.si .auth-card .input:-webkit-autofill { -webkit-text-fill-color: #f5f5f7; box-shadow: 0 0 0 100px #231f1b inset; caret-color: #f5f5f7; }
 .auth-err { margin: -4px 0 10px; color: var(--danger); font-size: 13px; }
 .auth-help { margin: 14px 0 0; font-size: 12.5px; color: var(--ink-3); text-align: center; }
-.auth-foot { margin: 0; color: var(--ink-3); font-size: 12px; }
+.auth-foot { margin: 0; padding: 0 clamp(20px, 7vw, 120px) 20px; color: rgba(255, 255, 255, 0.36); font-size: 12px; }
+
+@media (max-width: 860px) {
+  .auth.si { background: radial-gradient(90% 40% at 50% 22%, #1a130d 0%, #060504 60%, #000 100%); }
+  .si-moon { --d: min(80vw, 38vh); right: 50%; margin-right: calc(var(--d) / -2); top: 78px; margin-top: 0; }
+  .si-main { justify-content: flex-start; align-items: center; text-align: center; gap: 18px; padding-top: calc(78px + min(80vw, 38vh) + 7vh); }
+  .si-lede { display: none; }
+  .si-title { font-size: clamp(34px, 10vw, 48px); }
+  .si .auth-card { max-width: none; text-align: left; }
+}
+@media (prefers-reduced-motion: reduce) { .si-sheen { display: none; } }
 
 /* ---------------- app shell ---------------- */
 
