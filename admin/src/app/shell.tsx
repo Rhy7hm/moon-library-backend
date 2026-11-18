@@ -3,7 +3,7 @@
  * (search, upload), sheet and toasts.
  */
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { logout, nameOf, type Folder } from './api';
+import { fileUrl, logout, nameOf, type Folder } from './api';
 import { IAuto, IBriefcase, IChart, IChevR, IClock, IFolder, IGear, IGrid, IGrip, IHome, ILock, IMoonLine, IPin, IPulse, ISearch, ISignOut, ISparkles, ISun, ITrash, IUsers, IX } from './icons';
 import { ActivityPage, HomePage, InsightsPage, TeamPage, TrashPage } from './pages';
 import { SettingsPage } from './settings';
@@ -102,7 +102,7 @@ function TreeNode({ f, depth, current }: { f: Folder; depth: number; current: st
           {theme === '3d' ? (
             <img className="tree-folder" src={`${import.meta.env.BASE_URL}nav/folder.webp`} alt="" draggable={false} />
           ) : (
-            <span className="tree-dot" style={{ background: f.iconBg || '#4aa3ff' }} />
+            (f.icon?.startsWith('img:') ? <img className="tree-logo" src={fileUrl(f.icon.slice(4))} alt="" draggable={false} /> : <span className="tree-dot" style={{ background: f.iconBg || '#4aa3ff' }} />)
           )}
           <span>{nameOf(f)}</span>
           {f.restricted && <ILock className="tree-lock" width={11} height={11} aria-label="Limited to chosen people" />}
@@ -203,7 +203,7 @@ function Pinned({ current }: { current: string | null }) {
                 {theme === '3d' ? (
                   <img className="tree-folder" src={`${import.meta.env.BASE_URL}nav/folder.webp`} alt="" draggable={false} />
                 ) : (
-                  <span className="tree-dot" style={{ background: f.iconBg || '#4aa3ff' }} />
+                  (f.icon?.startsWith('img:') ? <img className="tree-logo" src={fileUrl(f.icon.slice(4))} alt="" draggable={false} /> : <span className="tree-dot" style={{ background: f.iconBg || '#4aa3ff' }} />)
                 )}
                 <span>{name}</span>
                 {above.length > 0 && <small className="pin-where">{nameOf(above[above.length - 1])}</small>}

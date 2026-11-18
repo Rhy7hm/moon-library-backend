@@ -475,7 +475,7 @@ section { margin-bottom: 28px; }
 .dialog footer { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 20px 18px; }
 .pick-list { display: flex; flex-direction: column; gap: 1px; max-height: 50vh; overflow-y: auto; margin: 0 -8px 8px; }
 .pick-row { display: flex; align-items: center; gap: 10px; height: 38px; padding-right: 12px; border: 0; border-radius: 9px; background: none; text-align: left; transition: background var(--t-fast); }
-.pick-row span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pick-row span:not(.avatar) { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pick-row:hover:not(:disabled) { background: var(--hover); }
 .pick-row.on { background: var(--accent-soft); }
 .pick-row:disabled { opacity: 0.35; cursor: not-allowed; }
@@ -1557,3 +1557,22 @@ body.no-select, body.no-select * { -webkit-user-select: none; user-select: none;
 .access .pick-list { margin: 0 -8px; max-height: 42vh; }
 .folder-lock { display: inline-flex; align-items: center; gap: 3px; margin-left: 2px; padding: 1px 7px 1px 5px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 11px; font-weight: 600; white-space: nowrap; }
 .tree-lock { flex: none; margin-left: 5px; color: var(--ink-3); }
+
+/* ---- folder colour & logo ---- */
+.glyph.has-logo { background: #fff; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08); overflow: hidden; padding: 4px; }
+.glyph.has-logo.small { padding: 2px; }
+.glyph.has-logo img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.tree-logo { width: 16px; height: 16px; border-radius: 4px; object-fit: contain; background: #fff; flex: none; }
+.look { display: flex; flex-direction: column; gap: 18px; }
+.look-preview { display: flex; align-items: center; gap: 14px; padding: 14px; border-radius: 14px; background: var(--surface-2); }
+.look-preview > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.look-preview strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.look-glyph { width: 56px; height: 56px; border-radius: 14px; }
+.look-glyph svg { width: 28px; height: 28px; }
+.swatches { display: flex; flex-wrap: wrap; gap: 10px; padding: 3px; }
+.swatch { position: relative; width: 28px; height: 28px; border-radius: 50%; border: 0; cursor: pointer; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12); transition: transform var(--t-fast); }
+.swatch:hover { transform: scale(1.1); }
+.swatch.on { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--ink); }
+.swatch.custom { background: conic-gradient(#ff5c5c, #f5b83d, #34c759, #30b0c7, #4c8dff, #9b7bff, #ff5c8a, #ff5c5c); overflow: hidden; }
+.swatch.custom input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.look-logo { display: flex; gap: 8px; flex-wrap: wrap; }

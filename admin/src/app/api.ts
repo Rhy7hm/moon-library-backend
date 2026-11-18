@@ -52,6 +52,8 @@ export type Folder = {
   slug: string;
   sort: number;
   iconBg: string | null;
+  /** 'img:<key>' when the folder has its own logo */
+  icon?: string | null;
   hidden: boolean;
   /** limited to chosen people (Owners always see it); `access` is who, sent to Owners only */
   restricted?: boolean;

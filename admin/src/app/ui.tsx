@@ -672,6 +672,15 @@ export function AssetCard({
 
 export function FolderGlyph({ f, small }: { f: Folder; small?: boolean }) {
   const [theme] = useTheme();
+  const logo = f.icon && f.icon.startsWith('img:') ? f.icon.slice(4) : null;
+  if (logo) {
+    // a folder with its own logo shows it in every theme
+    return (
+      <span className={`glyph has-logo${small ? ' small' : ''}`} style={{ ['--c' as string]: f.iconBg || '#4aa3ff' }}>
+        <img src={fileUrl(logo)} alt="" draggable={false} loading="lazy" />
+      </span>
+    );
+  }
   if (theme === '3d') {
     // the 3D theme draws every folder as the same 3D folder picture
     return (

@@ -3,8 +3,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fileUrl, mainFile, nameOf, titleOf, type Asset, type Folder, type Tag } from './api';
 import { fmtDate, fmtSize, matchesType, typeOf, type TypeFilter } from './format';
 import { AccessDialog } from './access';
+import { FolderLookDialog } from './folder-look';
 import { canConvert, ConvertDialog } from './convert';
-import { IClock, IDownload, IFolder, IGrid, IList, ILock, IMove, IPencil, IPin, IPinOff, IPlus, IReplace, ISearch, IShare, ITag, ITrash, IUpload, IX } from './icons';
+import { IClock, IDownload, IFolder, IGrid, IImage, IList, ILock, IMove, IPencil, IPin, IPinOff, IPlus, IReplace, ISearch, IShare, ITag, ITrash, IUpload, IX } from './icons';
 import { ClientAvatar, ShareWithClients } from './clients';
 import { useMarquee } from './marquee';
 import { sheetOrder, useFileDrop, useStore } from './store';
@@ -65,6 +66,7 @@ type Ask =
   | { kind: 'tag'; itemIds: string[] }
   | { kind: 'convert'; assets: Asset[] }
   | { kind: 'access'; folder: Folder }
+  | { kind: 'look'; folder: Folder }
   | null;
 
 /** The ••• menus for files and folders, and the dialogs they open (also used on the client page). */
@@ -104,6 +106,7 @@ export function useActions() {
       ? ([
           'sep',
           { label: 'Rename', icon: <IPencil />, onClick: () => setAsk({ kind: 'rename-folder', folder: f }) },
+          { label: 'Colour & logo…', icon: <IImage />, onClick: () => setAsk({ kind: 'look', folder: f }) },
           { label: 'Move to…', icon: <IMove />, onClick: () => setAsk({ kind: 'move', itemIds: [], folderIds: [f.id] }) },
           { label: 'Share with client…', icon: <IShare />, onClick: () => setAsk({ kind: 'share', target: 'folder', id: f.id, label: nameOf(f) }) },
           ...(s.isOwner ? ([{ label: f.restricted ? 'Who can open… (limited)' : 'Who can open…', icon: <ILock />, onClick: () => setAsk({ kind: 'access', folder: f }) }] as MenuItem[]) : []),
@@ -153,6 +156,8 @@ export function useActions() {
       />
     ) : ask?.kind === 'share' ? (
       <ShareWithClients kind={ask.target} id={ask.id} ids={ask.ids} label={ask.label} onClose={() => setAsk(null)} />
+    ) : ask?.kind === 'look' ? (
+      <FolderLookDialog folder={ask.folder} onClose={() => setAsk(null)} />
     ) : ask?.kind === 'access' ? (
       <AccessDialog folder={ask.folder} onClose={() => setAsk(null)} />
     ) : ask?.kind === 'convert' ? (
