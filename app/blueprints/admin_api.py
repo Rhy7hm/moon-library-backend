@@ -20,6 +20,7 @@ import tempfile
 
 from flask import Blueprint, Response, current_app, redirect, request
 
+from ..access import blocked_folders, guard_request
 from ..auth import check_origin, get_user, powers, require_power, require_user, write_log
 from ..services import activity
 from ..services.admin_ops import OPS, Ctx, check_key, http_meta, loose_folder_id
@@ -46,7 +47,7 @@ def admin_get(op: str):
         activity.cleanup()
     except Exception:  # noqa: BLE001
         log.exception("cleanup")
-    data = load_library(asset_base=current_app.config["ASSET_BASE"])
+    data = load_library(asset_base=current_app.config["ASSET_BASE"], blocked=blocked_folders(user), with_access=user.role in ("owner", "superadmin"))
     data["user"] = {"id": user.id, "username": user.username, "name": user.name, "role": user.role, "pins": pins_of(user.id), "powers": powers(user.role)}
     data["looseFolderId"] = loose_folder_id()  # "Unsorted": shown as files at the top of the Library
     return json_response(data, headers={"Cache-Control": "no-store"})
@@ -62,6 +63,7 @@ def admin_post(op: str):
     clients_in = isinstance(body.get("clientIds"), list) and len(body["clientIds"]) > 0
     need = "owner" if (op == "purge" and body.get("all") is True) or (op in ("trash", "restore", "purge") and clients_in) else activity.NEED.get(op, "editor")
     user = require_user(need)
+    guard_request(user, op, body)  # nothing can be changed inside a folder this person can't open
 
     manage = MANAGE_OPS.get(op) or CLIENT_OPS.get(op) or TAG_OPS.get(op)
     if manage:

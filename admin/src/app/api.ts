@@ -53,6 +53,9 @@ export type Folder = {
   sort: number;
   iconBg: string | null;
   hidden: boolean;
+  /** limited to chosen people (Owners always see it); `access` is who, sent to Owners only */
+  restricted?: boolean;
+  access?: string[];
   deletedAt: number | null;
   createdAt: number;
 };

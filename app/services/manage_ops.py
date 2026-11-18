@@ -8,6 +8,7 @@ import json
 import re
 from datetime import datetime, timezone
 
+from ..access import blocked_folders
 from ..auth import ASSIGNABLE, LOCK_AFTER, SessionUser, at_least, check_password_rules, hash_password, new_user_id, powers, require_power, write_log
 from ..db import in_list, q, UPSERT_SETTING
 from ..util import HttpError, is_num, now
@@ -183,6 +184,10 @@ def users_delete(user: SessionUser, b: dict):
 
 def audit_list(user: SessionUser, b: dict):
     where, vals = [], []
+    blocked = blocked_folders(user)
+    if blocked:  # what happened inside folders this person can't open isn't theirs to read
+        where.append(f"(folder_id IS NULL OR folder_id NOT IN ({in_list(len(blocked))}))")
+        vals += sorted(blocked)
     kind = "security" if b.get("kind") == "security" else "all" if b.get("kind") == "all" else "content"
     if kind in ("security", "all") and not (at_least(user.role, "owner") and powers(user.role)["securityLog"]):
         raise HttpError(403, "Only the Super admin can see the security log." if at_least(user.role, "owner") else "Only an Owner can see the security log.")
@@ -247,6 +252,40 @@ def audit_undo(user: SessionUser, b: dict):
     summary = undo_entry(user, e)
     q.run("UPDATE audit_log SET undone_at = ?, undone_by = ? WHERE id = ?", now(), user.username, eid)
     write_log(user, {"kind": "content", "action": "undo", "summary": summary, "targetIds": json.loads(e["target_ids"]) if e["target_ids"] else None, "folderId": e["folder_id"], "detail": {"entry": eid}})
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- who can open a folder (Owner only)
+
+def folder_access(user: SessionUser, b: dict):
+    """{ id, restricted, userIds } — limit a folder (and everything in it) to the chosen people, or open it to the team again."""
+    f = q.first("SELECT id, name, restricted FROM folders WHERE id = ? AND deleted_at IS NULL", str(b.get("id") or ""))
+    if not f:
+        raise HttpError(404, "Folder not found")
+    if not isinstance(b.get("restricted"), bool):
+        raise HttpError(400, "Expected true or false for restricted")
+    ids = list(dict.fromkeys(x for x in (b.get("userIds") or []) if isinstance(x, str)))[:200] if b["restricted"] else []
+    if ids:  # only people who aren't Owners can be listed: Owners always see everything
+        ok = {r["id"] for r in q.all(f"SELECT id FROM users WHERE id IN ({in_list(len(ids))}) AND role IN ('editor','viewer') AND disabled = 0", *ids)}
+        if len(ok) != len(ids):
+            raise HttpError(400, "Choose people from the team (Owners can always open every folder)")
+    q.batch(
+        [
+            ("UPDATE folders SET restricted = ?, updated_at = ? WHERE id = ?", [1 if b["restricted"] else 0, now(), f["id"]]),
+            ("DELETE FROM folder_access WHERE folder_id = ?", [f["id"]]),
+            *[("INSERT INTO folder_access (folder_id, user_id) VALUES (?, ?)", [f["id"], uid]) for uid in ids],
+        ]
+    )
+    from .activity import en
+
+    nm = en(f["name"])
+    if b["restricted"]:
+        names = [r["display_name"] for r in q.all(f"SELECT display_name FROM users WHERE id IN ({in_list(len(ids))})", *ids)] if ids else []
+        who = ", ".join(names[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else "") if names else "Owners only"
+        summary = f"Limited the folder “{nm}” to {who}"
+    else:
+        summary = f"Opened the folder “{nm}” to the whole team again"
+    write_log(user, {"kind": "content", "action": "folder.access", "summary": summary, "targetType": "folder", "targetIds": [f["id"]], "folderId": f["id"]})
     return {"ok": True}
 
 
@@ -378,4 +417,5 @@ MANAGE_OPS = {
     "settings.get": settings_get,
     "settings.set": settings_set,
     "pins.set": pins_set,
+    "folder.access": folder_access,
 }

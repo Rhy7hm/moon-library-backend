@@ -12,6 +12,7 @@ import re
 from flask import Blueprint, Response, request, stream_with_context
 from zipstream import ZIP_STORED, ZipStream
 
+from ..access import blocked_folders, key_allowed
 from ..auth import get_user
 from ..db import in_list, q
 from ..media import safe_file_headers
@@ -50,7 +51,8 @@ def _parse_range(h: str | None):
 @bp.route("/f/<path:key>", methods=["GET", "HEAD"])
 def serve_file(key: str):
     """A stored file by its storage key, for signed-in staff. Anyone else gets 404 (no hint the file exists)."""
-    if not re.match(r"^(o|v|t|p|i|c|u)/", key) or not get_user():
+    user = get_user()
+    if not re.match(r"^(o|v|t|p|i|c|u)/", key) or not user or not key_allowed(user, key):
         return Response("Not found", status=404, mimetype="text/plain", headers={"Cache-Control": "no-store"})
     dl = (request.args.get("dl") or key.split("/")[-1] or "download") if "dl" in request.args else None
     # keys never change (a replaced file gets new ones), so the browser keeps its own copy and never asks again
@@ -135,14 +137,16 @@ MAX_FILES = 500
 
 @bp.get("/zip")
 def zip_download():
-    if not get_user():
+    user = get_user()
+    if not user:
         return Response("Not found", status=404, mimetype="text/plain")
+    blocked = blocked_folders(user)
     ids = list(dict.fromkeys(x.strip() for x in (request.args.get("v") or "").split(",") if x.strip()))[:MAX_FILES]
     # ?folder=<id>: everything in a folder and its sub-folders, laid out in the same sub-folders
     prefix: dict[str, str] = {}
     folder_name = None
     if request.args.get("folder"):
-        got = _folder_files(request.args["folder"])
+        got = None if request.args["folder"] in blocked else _folder_files(request.args["folder"])
         if got is None:
             return Response("Not found", status=404, mimetype="text/plain")
         ids, prefix, folder_name = got
@@ -167,7 +171,7 @@ def zip_download():
         )
     if rows:
         trashed = _trashed_folders()
-        rows = [r for r in rows if r["folder_id"] not in trashed]
+        rows = [r for r in rows if r["folder_id"] not in trashed and r["folder_id"] not in blocked]
     if not rows:
         return Response("Not found", status=404, mimetype="text/plain")
     by_id = {r["id"]: r for r in rows}

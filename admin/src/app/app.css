@@ -800,7 +800,7 @@ section { margin-bottom: 28px; }
 .pick-list.tall { max-height: 52vh; min-height: 220px; }
 .tree-pick { padding-right: 8px; height: auto; min-height: 38px; }
 .pick-label { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; cursor: pointer; }
-.pick-label > span:not(.glyph):not(.client-avatar):not(.pick-thumb) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pick-label > span:not(.glyph):not(.client-avatar):not(.pick-thumb):not(.avatar) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pick-label input { width: 16px; height: 16px; accent-color: var(--accent); flex: none; }
 .pick-thumb { width: 28px; height: 28px; flex: none !important; border-radius: 6px; overflow: hidden; background: var(--surface-2); }
 .pick-thumb .thumb-tile b { display: none; }
@@ -1548,3 +1548,12 @@ body.no-select, body.no-select * { -webkit-user-select: none; user-select: none;
   .tagbar-count { margin-left: 0; width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) { .tagpop, .tagpop-row { animation: none; } .tagbtn-chev { transition: none; } }
+
+/* ---- limited folders: who can open ---- */
+.access { display: flex; flex-direction: column; gap: 12px; }
+.access .seg { align-self: flex-start; }
+.access-note { display: flex; align-items: flex-start; gap: 7px; margin: 0; font-size: 13px; line-height: 1.45; }
+.access-note svg { flex: none; margin-top: 2px; }
+.access .pick-list { margin: 0 -8px; max-height: 42vh; }
+.folder-lock { display: inline-flex; align-items: center; gap: 3px; margin-left: 2px; padding: 1px 7px 1px 5px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.tree-lock { flex: none; margin-left: 5px; color: var(--ink-3); }

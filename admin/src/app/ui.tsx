@@ -5,7 +5,7 @@ import { adFormat } from '@/lib/adformat';
 import { extOf, fileUrl, mainFile, nameOf, titleOf, type Asset, type Folder, type Me } from './api';
 import { isDesignFile } from './derive/derive-design';
 import { extColor, fmtDuration, fmtSize, typeOf } from './format';
-import { IAudio, ICheck, IChevR, ICopy, IDoc, IFile, IFolder, IImage, IMore, IPen, IVideo, IX } from './icons';
+import { IAudio, ICheck, IChevR, ICopy, IDoc, IFile, IFolder, IImage, ILock, IMore, IPen, IVideo, IX } from './icons';
 import { useStore } from './store';
 import { useTheme } from './theme';
 
@@ -704,7 +704,14 @@ export function FolderTile({ folder, count, onOpen, menu }: { folder: Folder; co
       <FolderGlyph f={folder} />
       <div className="folder-text">
         <strong title={nameOf(folder)}>{nameOf(folder)}</strong>
-        <small>{count === 1 ? '1 item' : `${count} items`}</small>
+        <small>
+          {count === 1 ? '1 item' : `${count} items`}
+          {folder.restricted && (
+            <span className="folder-lock" title="Only chosen people and Owners can open this folder">
+              <ILock width={12} height={12} /> Limited
+            </span>
+          )}
+        </small>
       </div>
       <MenuButton items={menu} />
     </div>

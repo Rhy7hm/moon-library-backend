@@ -20,6 +20,7 @@ from .library import file_keys
 NEED = {
     # purge of specific items is Editor; emptying the whole Trash (all: true) is checked in admin_api
     "pins.set": "viewer",  # pinning folders in your own sidebar is personal, so every role may
+    "folder.access": "owner",
     "users.list": "owner",
     "users.create": "owner",
     "users.update": "owner",

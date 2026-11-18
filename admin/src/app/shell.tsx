@@ -4,7 +4,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { logout, nameOf, type Folder } from './api';
-import { IAuto, IBriefcase, IChart, IChevR, IClock, IFolder, IGear, IGrid, IGrip, IHome, IMoonLine, IPin, IPulse, ISearch, ISignOut, ISparkles, ISun, ITrash, IUsers, IX } from './icons';
+import { IAuto, IBriefcase, IChart, IChevR, IClock, IFolder, IGear, IGrid, IGrip, IHome, ILock, IMoonLine, IPin, IPulse, ISearch, ISignOut, ISparkles, ISun, ITrash, IUsers, IX } from './icons';
 import { ActivityPage, HomePage, InsightsPage, TeamPage, TrashPage } from './pages';
 import { SettingsPage } from './settings';
 import { FolderPage, RecentPage, SearchPage } from './library';
@@ -105,6 +105,7 @@ function TreeNode({ f, depth, current }: { f: Folder; depth: number; current: st
             <span className="tree-dot" style={{ background: f.iconBg || '#4aa3ff' }} />
           )}
           <span>{nameOf(f)}</span>
+          {f.restricted && <ILock className="tree-lock" width={11} height={11} aria-label="Limited to chosen people" />}
         </button>
         <button
           className={`tree-pin${s.pins.includes(f.id) ? ' on' : ''}`}

@@ -43,6 +43,8 @@ folders = Table(
     Column("icon_fg", VARCHAR(16), nullable=True),
     # 1 = hidden from the library page, with everything inside (D1 migration 0015)
     Column("hidden", Integer, nullable=False, server_default="0"),
+    # 1 = only Owners and the people listed in folder_access can open it (migration 0010)
+    Column("restricted", Integer, nullable=False, server_default="0"),
     Index("folders_parent", "parent_id", "sort"),
     **TABLE_ARGS,
 )
@@ -342,7 +344,18 @@ item_tags = Table(
     **TABLE_ARGS,
 )
 
+folder_access = Table(
+    "folder_access",
+    metadata,
+    Column("folder_id", VARCHAR(64, collation=BIN), nullable=False),
+    Column("user_id", VARCHAR(64, collation=BIN), nullable=False),
+    PrimaryKeyConstraint("folder_id", "user_id"),
+    Index("folder_access_user", "user_id"),
+    **TABLE_ARGS,
+)
+
 ALL_TABLES = [
+    "folder_access",
     "item_tags",
     "tags",
     "folders",
