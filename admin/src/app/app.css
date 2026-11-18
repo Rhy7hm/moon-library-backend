@@ -1555,7 +1555,14 @@ body.no-select, body.no-select * { -webkit-user-select: none; user-select: none;
 .access-note { display: flex; align-items: flex-start; gap: 7px; margin: 0; font-size: 13px; line-height: 1.45; }
 .access-note svg { flex: none; margin-top: 2px; }
 .access .pick-list { margin: 0 -8px; max-height: 42vh; }
-.folder-lock { display: inline-flex; align-items: center; gap: 3px; margin-left: 2px; padding: 1px 7px 1px 5px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.folder-count { white-space: nowrap; }
+.folder-text { container-type: inline-size; }
+.folder-text small:has(.folder-lock) { flex-wrap: wrap; row-gap: 3px; }
+/* a narrow tile with a longer count ("12 items") keeps one line by showing only the lock */
+@container (max-width: 135px) { .folder-lock[data-plural] .lock-word { display: none; } .folder-lock[data-plural] { padding: 2px 6px; } }
+.folder-lock { flex: none; display: inline-flex; align-items: center; gap: 3px; padding: 1px 7px 1px 5px; border-radius: 999px; background: color-mix(in srgb, #4a8cff 16%, transparent); color: #3b82f6; font-size: 11px; font-weight: 600; white-space: nowrap; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .folder-lock { color: #7ab0ff; } }
+:root[data-theme="dark"] .folder-lock { color: #7ab0ff; }
 .tree-lock { flex: none; margin-left: 5px; color: var(--ink-3); }
 
 /* ---- folder colour & logo ---- */

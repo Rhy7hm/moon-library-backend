@@ -714,10 +714,10 @@ export function FolderTile({ folder, count, onOpen, menu }: { folder: Folder; co
       <div className="folder-text">
         <strong title={nameOf(folder)}>{nameOf(folder)}</strong>
         <small>
-          {count === 1 ? '1 item' : `${count} items`}
+          <span className="folder-count">{count === 1 ? '1 item' : `${count} items`}</span>
           {folder.restricted && (
-            <span className="folder-lock" title="Only chosen people and Owners can open this folder">
-              <ILock width={12} height={12} /> Limited
+            <span className="folder-lock" data-plural={count !== 1 ? "" : undefined} title="Only chosen people and Owners can open this folder">
+              <ILock width={12} height={12} /> <span className="lock-word">Limited</span>
             </span>
           )}
         </small>
