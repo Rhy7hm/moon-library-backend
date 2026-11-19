@@ -12,7 +12,7 @@ import { sheetOrder, useFileDrop, useStore } from './store';
 import { isEmpty, KIND_LABEL, KIND_QUERY, matches, parse, withFilter, without, type Token } from './search';
 import { TagDialog, tagQuery } from './tags';
 import { applyTagFilter, NO_TAG_FILTER, tagFilterOn, tagStats, TagFilterBar, TagFilterButton, toggleTagId, type TagFilter } from './tag-filter';
-import { AssetBadges, AssetCard, Button, Crumbs, Empty, FolderPicker, FolderTile, PageHeader, PromptDialog, Segmented, Thumb, TypeIcon, endDrag, startDrag, type MenuItem } from './ui';
+import { AssetBadges, AssetCard, Button, Crumbs, Empty, FolderPicker, FolderTile, PageHeader, PromptDialog, Segmented, Thumb, TypeIcon, draggedFromHere, endDrag, startDrag, useMoveDrop, type MenuItem } from './ui';
 
 type Sort = 'new' | 'old' | 'name' | 'size';
 type View = 'grid' | 'list';
@@ -468,6 +468,9 @@ export function FolderPage({ id }: { id: string | null }) {
 
   const onFiles = useCallback((files: File[]) => files.length && s.upload(files, id), [s, id]);
   const over = useFileDrop(onFiles, s.canEdit);
+  // files carried here from another page (rest on a folder and it opens): drop anywhere on the page to move them in
+  const into = useMoveDrop(id, folder ? nameOf(folder) : 'Library');
+  const takeDrop = into.over && !draggedFromHere();
 
   if (id && (!folder || folder.deletedAt)) {
     return <Empty icon={<IFolder />} title="Folder not found" text="It may have been moved to Trash." action={<Button onClick={() => s.go({ page: 'folder', id: null })}>Back to Library</Button>} />;
@@ -475,7 +478,7 @@ export function FolderPage({ id }: { id: string | null }) {
   const count = (f: Folder) => s.children(f.id).length + s.assetsIn(f.id).length;
 
   return (
-    <div className="page">
+    <div className={`page${takeDrop ? ' page-drop' : ''}`} data-drop-label={takeDrop ? `Drop to move into “${folder ? nameOf(folder) : 'Library'}”` : undefined} {...into.dropProps}>
       <PageHeader
         title={folder ? nameOf(folder) : 'Library'}
         sub={folder ? `${sub.length ? `${sub.length} ${sub.length === 1 ? 'folder' : 'folders'} · ` : ''}${assets.length} ${assets.length === 1 ? 'file' : 'files'} · ${fmtSize(assets.reduce((n, a) => n + (mainFile(a)?.size ?? 0), 0))}` : s.canEdit ? 'Drop files anywhere to add them. Drag files onto a folder to sort them.' : 'All your folders and files.'}

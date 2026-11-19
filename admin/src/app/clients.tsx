@@ -8,9 +8,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { errText, fileUrl, mainFile, nameOf, op, titleOf, type Asset, type Client, type ClientLogin, type Folder, type Share } from './api';
 import { encodeAvatar } from './avatar-encode';
 import { fmtAgo, fmtDate } from './format';
-import { IBriefcase, ICheck, IChevR, IClock, IDownload, IExternal, IFolder, IImage, IKey, ILink, IPencil, IPlus, ISearch, IShare, ITrash, IUpload, IUsers, IX } from './icons';
+import { IBriefcase, ICheck, ILock, IChevR, IClock, IDownload, IExternal, IFolder, IImage, IKey, ILink, IPencil, IPlus, ISearch, IShare, ITrash, IUpload, IUsers, IX } from './icons';
 import { useFileDrop, useStore } from './store';
-import { AssetCard, Button, ConfirmDialog, CopyButton, Dialog, Empty, FolderGlyph, MenuButton, PageHeader, Segmented, Thumb, type MenuItem } from './ui';
+import { DRAG_TYPE, type DragLoad, AssetCard, Button, ConfirmDialog, CopyButton, Dialog, Empty, FolderGlyph, MenuButton, PageHeader, Segmented, Thumb, type MenuItem } from './ui';
 import { download, downloadZip, useActions } from './library';
 import { useMarquee } from './marquee';
 
@@ -74,6 +74,62 @@ function useShareSummary(c: Client) {
 const DAY = 864e5;
 /** true once a share's end date has passed (the client no longer sees it) */
 export const ended = (sh: Share) => !!sh.expiresAt && sh.expiresAt <= Date.now();
+
+/**
+ * Drop files or folders you're dragging (from any page — rest on Clients, then on the client, to get here) onto a
+ * client's card or page: they're shared with that client. Anything already shared with them is left as it is.
+ */
+function useShareDrop(c: Client | undefined) {
+  const s = useStore();
+  const [over, setOver] = useState(false);
+  const depth = useRef(0);
+  if (!c || !s.canEdit) return { over: false, dropProps: {} };
+  const has = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes(DRAG_TYPE);
+  const dropProps = {
+    onDragEnter: (e: React.DragEvent) => {
+      if (!has(e)) return;
+      e.preventDefault();
+      depth.current++;
+      setOver(true);
+    },
+    onDragOver: (e: React.DragEvent) => {
+      if (!has(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    },
+    onDragLeave: (e: React.DragEvent) => {
+      if (!has(e)) return;
+      depth.current = Math.max(0, depth.current - 1);
+      if (!depth.current) setOver(false);
+    },
+    onDrop: (e: React.DragEvent) => {
+      if (!has(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      depth.current = 0;
+      setOver(false);
+      let load: DragLoad;
+      try {
+        load = JSON.parse(e.dataTransfer.getData(DRAG_TYPE));
+      } catch {
+        return;
+      }
+      const already = new Set(c.shares.filter((x) => !ended(x)).map((x) => `${x.kind}:${x.targetId}`));
+      const itemIds = (load.items ?? []).filter((id) => !already.has(`item:${id}`));
+      const folderIds = (load.folders ?? []).filter((id) => !already.has(`folder:${id}`));
+      const n = itemIds.length + folderIds.length;
+      if (!n) return s.toast(`Already shared with ${c.name}`);
+      const what = !folderIds.length ? 'file' : !itemIds.length ? 'folder' : 'item';
+      void s.run('shares.add', { clientId: c.id, itemIds, folderIds }, `Shared ${n} ${what}${n === 1 ? '' : 's'} with ${c.name}`, async () => {
+        // undo: stop sharing just what this drop added
+        const now = (await op<{ clients: Client[] }>('clients.list', {})).clients.find((x) => x.id === c.id);
+        const ids = (now?.shares ?? []).filter((x) => (x.kind === 'item' && itemIds.includes(x.targetId!)) || (x.kind === 'folder' && folderIds.includes(x.targetId!))).map((x) => x.id);
+        if (ids.length) await op('shares.remove', { clientId: c.id, ids });
+      });
+    },
+  };
+  return { over, dropProps };
+}
 const endOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59).getTime();
 const dateInput = (ms: number) => {
   const d = new Date(ms);
@@ -203,8 +259,9 @@ function ClientCard({ c, onOpen }: { c: Client; onOpen: () => void }) {
       <b>{n}</b> {n === 1 ? one : many}
     </span>
   );
+  const { over, dropProps } = useShareDrop(c);
   return (
-    <button className="client-card" onClick={onOpen} style={{ ['--c' as string]: color }}>
+    <button className={`client-card${over ? ' drop-on' : ''}`} onClick={onOpen} style={{ ['--c' as string]: color }} data-spring={`client:${c.id}`} title={over ? `Drop to share with ${c.name}` : undefined} {...dropProps}>
       <span className={`cc-cover n${sum.preview.length}`} aria-hidden>
         {sum.preview.length ? (
           sum.preview.map((a) => (
@@ -324,6 +381,7 @@ function ClientBody({ c, onEdit, onAdd, onNewFolder, onDelete, modals }: { c: Cl
     [c.id, s],
   );
   const over = useFileDrop(dropHere, s.canEdit);
+  const share = useShareDrop(c);
   // a shared folder's menu: its end date and sharing first, then everything the Library's menu has
   const sharedMenu = (sh: Share, f: Folder | undefined): MenuItem[] => [
     ...(s.canEdit
@@ -336,7 +394,7 @@ function ClientBody({ c, onEdit, onAdd, onNewFolder, onDelete, modals }: { c: Cl
   ];
 
   return (
-    <div className="page">
+    <div className="page" {...share.dropProps}>
       <nav className="crumbs" aria-label="Path">
         <button onClick={() => s.go({ page: 'clients' })}>Clients</button>
         <span>
@@ -379,95 +437,120 @@ function ClientBody({ c, onEdit, onAdd, onNewFolder, onDelete, modals }: { c: Cl
 
       <ClientStats c={c} sum={sum} onLogins={() => onEdit('logins')} />
 
+      <section className="cgroup is-shared">
+        <header className="cgroup-head">
+          <span className="cgroup-badge"><IShare /> On the client website</span>
+          <h2>Shared with {c.name}</h2>
+          <p>{c.shares.length ? `${c.shares.filter((x) => !ended(x)).length} shared · what ${c.name} sees when they sign in. Shared folders update by themselves.` : `Nothing yet. What you share here is what ${c.name} sees when they sign in.`}</p>
+          {s.canEdit && c.shares.length > 0 && (
+            <Button size="sm" icon={<IPlus />} onClick={onAdd}>
+              Share more
+            </Button>
+          )}
+        </header>
+      {!c.shares.length ? (
+          <Empty
+            icon={<IShare />}
+            title="Nothing shared yet"
+            text={`Share folders, files or links, or drag files here. That’s what ${c.name} will see on the client website.`}
+            action={s.canEdit && <Button kind="primary" icon={<IPlus />} onClick={onAdd}>Share something</Button>}
+          />
+        ) : (
+          <>
+            {folders.length > 0 && (
+              <section>
+                <h3 className="section-title">Folders</h3>
+                <div className="folders">
+                  {folders.map((sh) => {
+                    const f = sh.targetId ? s.byId.get(sh.targetId) : undefined;
+                    return (
+                      <SharedFolder key={sh.id} f={f} share={sh} menu={sharedMenu(sh, f)} />
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+            {items.length > 0 && (
+              <section>
+                <h3 className="section-title">Files</h3>
+                <div className="grid">
+                  {items.map((sh) => {
+                    const a = s.tree?.items.find((x) => x.id === sh.targetId);
+                    const menu: MenuItem[] = s.canEdit
+                      ? [
+                          { label: sh.expiresAt ? 'Change end date…' : 'Set end date…', icon: <IClock />, onClick: () => setUntil({ shs: [sh], label: a ? titleOf(a) : 'file' }) },
+                          'sep',
+                          { label: 'Stop sharing', icon: <IX />, danger: true, onClick: () => remove(sh, a ? titleOf(a) : 'file') },
+                        ]
+                      : [];
+                    return a ? (
+                      <div key={sh.id} className={`share-card${a.deletedAt || ended(sh) ? ' is-trashed' : ''}`}>
+                        <AssetCard asset={a} selected={sel.has(a.id)} selecting={sel.size > 0} onToggle={() => toggle(a.id)} onOpen={() => s.openSheet(a.id)} menu={menu} where={a.deletedAt ? 'In Trash — not shown' : s.path(a.folderId).map(nameOf).join(' › ')} />
+                        <UntilBadge sh={sh} />
+                      </div>
+                    ) : null;
+                  })}
+                </div>
+              </section>
+            )}
+            {links.length > 0 && (
+              <section>
+                <h3 className="section-title">Links</h3>
+                <div className="list-card">
+                  {links.map((sh) => (
+                    <div className="list-row" key={sh.id}>
+                      <span className="row-icon">
+                        <ILink />
+                      </span>
+                      <span className="list-text">
+                        <strong>
+                          {sh.title} <UntilBadge sh={sh} />
+                        </strong>
+                        <small>{sh.url}</small>
+                      </span>
+                      {s.canEdit && (
+                        <button className="icon-btn" aria-label="Set end date" title={sh.expiresAt ? 'Change end date' : 'Set end date'} onClick={() => setUntil({ shs: [sh], label: sh.title || 'link' })}>
+                          <IClock />
+                        </button>
+                      )}
+                      <a className="icon-btn" href={sh.url ?? '#'} target="_blank" rel="noreferrer noopener" aria-label="Open link" title="Open">
+                        <IExternal />
+                      </a>
+                      {s.canEdit && (
+                        <button className="icon-btn" aria-label="Stop sharing" title="Stop sharing" onClick={() => remove(sh, sh.title || 'link')}>
+                          <IX />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+          </>
+        )}
+      </section>
+
       {(home || inbox) && (
-        <section>
-          <h2 className="section-title">In the library</h2>
+        <section className="cgroup is-team">
+          <header className="cgroup-head">
+            <span className="cgroup-badge"><ILock /> Team only</span>
+            <h2>Team workspace</h2>
+            <p>Where your team keeps {c.name}’s work. Not on the client website unless you share it.</p>
+          </header>
           <div className="folders">
-            {home && <SharedFolder f={home} note="Their folder" menu={folderMenu(home)} />}
-            {inbox && <SharedFolder f={inbox} note="Files they sent you" menu={folderMenu(inbox)} />}
+            {home && <SharedFolder f={home} note="Working folder" menu={folderMenu(home)} />}
+            {inbox && <SharedFolder f={inbox} note={`Uploaded by ${c.name}`} menu={folderMenu(inbox)} />}
           </div>
         </section>
       )}
-
-      {!c.shares.length ? (
-        <Empty
-          icon={<IShare />}
-          title="Nothing shared yet"
-          text={`Share folders, files or links — that's what ${c.name} will see on the client website.`}
-          action={s.canEdit && <Button kind="primary" icon={<IPlus />} onClick={onAdd}>Share something</Button>}
-        />
-      ) : (
-        <>
-          {folders.length > 0 && (
-            <section>
-              <h2 className="section-title">Folders</h2>
-              <div className="folders">
-                {folders.map((sh) => {
-                  const f = sh.targetId ? s.byId.get(sh.targetId) : undefined;
-                  return (
-                    <SharedFolder key={sh.id} f={f} share={sh} menu={sharedMenu(sh, f)} />
-                  );
-                })}
-              </div>
-            </section>
-          )}
-          {items.length > 0 && (
-            <section>
-              <h2 className="section-title">Files</h2>
-              <div className="grid">
-                {items.map((sh) => {
-                  const a = s.tree?.items.find((x) => x.id === sh.targetId);
-                  const menu: MenuItem[] = s.canEdit
-                    ? [
-                        { label: sh.expiresAt ? 'Change end date…' : 'Set end date…', icon: <IClock />, onClick: () => setUntil({ shs: [sh], label: a ? titleOf(a) : 'file' }) },
-                        'sep',
-                        { label: 'Stop sharing', icon: <IX />, danger: true, onClick: () => remove(sh, a ? titleOf(a) : 'file') },
-                      ]
-                    : [];
-                  return a ? (
-                    <div key={sh.id} className={`share-card${a.deletedAt || ended(sh) ? ' is-trashed' : ''}`}>
-                      <AssetCard asset={a} selected={sel.has(a.id)} selecting={sel.size > 0} onToggle={() => toggle(a.id)} onOpen={() => s.openSheet(a.id)} menu={menu} where={a.deletedAt ? 'In Trash — not shown' : s.path(a.folderId).map(nameOf).join(' › ')} />
-                      <UntilBadge sh={sh} />
-                    </div>
-                  ) : null;
-                })}
-              </div>
-            </section>
-          )}
-          {links.length > 0 && (
-            <section>
-              <h2 className="section-title">Links</h2>
-              <div className="list-card">
-                {links.map((sh) => (
-                  <div className="list-row" key={sh.id}>
-                    <span className="row-icon">
-                      <ILink />
-                    </span>
-                    <span className="list-text">
-                      <strong>
-                        {sh.title} <UntilBadge sh={sh} />
-                      </strong>
-                      <small>{sh.url}</small>
-                    </span>
-                    {s.canEdit && (
-                      <button className="icon-btn" aria-label="Set end date" title={sh.expiresAt ? 'Change end date' : 'Set end date'} onClick={() => setUntil({ shs: [sh], label: sh.title || 'link' })}>
-                        <IClock />
-                      </button>
-                    )}
-                    <a className="icon-btn" href={sh.url ?? '#'} target="_blank" rel="noreferrer noopener" aria-label="Open link" title="Open">
-                      <IExternal />
-                    </a>
-                    {s.canEdit && (
-                      <button className="icon-btn" aria-label="Stop sharing" title="Stop sharing" onClick={() => remove(sh, sh.title || 'link')}>
-                        <IX />
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-        </>
+      {share.over && (
+        <div className="drop-overlay">
+          <div>
+            <IShare />
+            <strong>Drop to share with {c.name}</strong>
+            <span>They’ll see it on the client website</span>
+          </div>
+        </div>
       )}
       {over && (
         <div className="drop-overlay">
@@ -539,9 +622,6 @@ function ClientStats({ c, sum, onLogins }: { c: Client; sum: { files: number; fo
         </span>
         <IChevR />
       </button>
-      <p className="client-stats-note">
-        <IShare /> What {c.name} sees on the client website. Shared folders update by themselves.
-      </p>
     </section>
   );
 }
@@ -721,7 +801,7 @@ function SharedFolder({ f, share, note, menu }: { f: Folder | undefined; share?:
   const n = count(f.id);
   const where = note ?? (s.path(f.parentId).map(nameOf).join(' › ') || 'Library');
   return (
-    <div className={`folder shared-folder${trashed || (share && ended(share)) ? ' is-trashed' : ''}`} tabIndex={0} onClick={() => !trashed && s.go({ page: 'folder', id: f.id })}>
+    <div className={`folder shared-folder${trashed || (share && ended(share)) ? ' is-trashed' : ''}`} data-spring={trashed ? undefined : `folder:${f.id}`} tabIndex={0} onClick={() => !trashed && s.go({ page: 'folder', id: f.id })}>
       <FolderGlyph f={f} />
       <div className="folder-text">
         <strong title={nameOf(f)}>{nameOf(f)}</strong>

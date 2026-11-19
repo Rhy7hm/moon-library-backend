@@ -15,6 +15,7 @@ import { useStore, type Route } from './store';
 import { GlobalDrop } from './upload-to';
 import { enter } from './enter';
 import { startFx } from './fx';
+import { startSpring } from './spring';
 import { gsap, pop, settle } from './motion';
 import { useTheme } from './theme';
 import { MenuButton, Toasts, UploadTray, UserAvatar, useMoveDrop } from './ui';
@@ -33,7 +34,7 @@ function NavItem({ icon, label, active, onClick, count }: { icon: ReactNode; lab
  * The main places. Their icon is a 3D picture in the 3D theme and a line icon otherwise; either way the
  * current one sits a little bigger, and a click squashes and pops it (GSAP).
  */
-function NavMain({ src, icon, label, active, onClick, count }: { src: string; icon: ReactNode; label: string; active: boolean; onClick: () => void; count?: number }) {
+function NavMain({ src, icon, label, active, onClick, count, spring }: { src: string; icon: ReactNode; label: string; active: boolean; onClick: () => void; count?: number; spring?: string }) {
   const [theme] = useTheme();
   const is3d = theme === '3d';
   const big = is3d ? 1.18 : 1.12; // how much bigger the current page's icon sits
@@ -60,6 +61,7 @@ function NavMain({ src, icon, label, active, onClick, count }: { src: string; ic
         onClick();
       }}
       aria-current={active ? 'page' : undefined}
+      data-spring={spring}
     >
       <span ref={img} className="nav-icon">
         {is3d ? <img src={`${import.meta.env.BASE_URL}nav/${src}.webp`} alt="" width={26} height={26} draggable={false} /> : icon}
@@ -94,7 +96,7 @@ function TreeNode({ f, depth, current }: { f: Folder; depth: number; current: st
   };
   return (
     <>
-      <div className={`tree-row${on ? ' on' : ''}${over ? ' drop-on' : ''}`} style={{ paddingLeft: 6 + depth * 14 }} {...dropProps}>
+      <div className={`tree-row${on ? ' on' : ''}${over ? ' drop-on' : ''}`} style={{ paddingLeft: 6 + depth * 14 }} data-spring={`folder:${f.id}`} {...dropProps}>
         <button className={`tree-caret${open ? ' open' : ''}${kids.length ? '' : ' none'}`} aria-label={open ? 'Collapse' : 'Expand'} onClick={toggleOpen} tabIndex={kids.length ? 0 : -1}>
           <IChevR />
         </button>
@@ -172,6 +174,7 @@ function Pinned({ current }: { current: string | null }) {
               role="listitem"
               ref={(el) => void (el ? rows.current.set(id, el) : rows.current.delete(id))}
               className={`tree-row pin-row${current === id ? ' on' : ''}${dragId === id ? ' dragging' : ''}`}
+              data-spring={`folder:${id}`}
               draggable
               onDragStart={(e) => {
                 setDragId(id);
@@ -296,6 +299,10 @@ export function Shell({ onSignedOut }: { onSignedOut: () => void }) {
   const nav = (to: Route) => () => s.go(to);
   // the Dock-like sidebar, tilting cards and leaning buttons (fx.ts)
   useEffect(() => startFx(), []);
+  // drag files onto a place and rest there: it opens (spring.ts)
+  const live = useRef({ go: s.go, r });
+  live.current = { go: s.go, r };
+  useEffect(() => startSpring((to) => live.current.go(to), () => live.current.r), []);
   // the dashboard comes in (enter.ts) once the library has loaded
   const appRef = useRef<HTMLDivElement>(null);
   const loaded = !!s.tree;
@@ -327,9 +334,9 @@ export function Shell({ onSignedOut }: { onSignedOut: () => void }) {
         <nav className="nav" aria-label="Main">
           <i className="nav-glide" aria-hidden />
           <NavMain src="home" icon={<IHome />} label="Home" active={r.page === 'home'} onClick={nav({ page: 'home' })} />
-          <NavMain src="collection" icon={<IFolder />} label="Library" active={r.page === 'folder' && !r.id} onClick={nav({ page: 'folder', id: null })} />
+          <NavMain src="collection" icon={<IFolder />} label="Library" active={r.page === 'folder' && !r.id} onClick={nav({ page: 'folder', id: null })} spring="folder:" />
           <NavMain src="recent" icon={<IClock />} label="Recent" active={r.page === 'recent'} onClick={nav({ page: 'recent' })} />
-          <NavMain src="clients" icon={<IBriefcase />} label="Clients" active={r.page === 'clients' || r.page === 'client'} onClick={nav({ page: 'clients' })} count={s.clients.length} />
+          <NavMain src="clients" icon={<IBriefcase />} label="Clients" active={r.page === 'clients' || r.page === 'client'} onClick={nav({ page: 'clients' })} count={s.clients.length} spring="clients" />
           <NavMain src="trash" icon={<ITrash />} label="Trash" active={r.page === 'trash'} onClick={nav({ page: 'trash' })} count={s.trashAssets.length + s.trashFolders.length} />
         </nav>
         <Pinned current={current} />

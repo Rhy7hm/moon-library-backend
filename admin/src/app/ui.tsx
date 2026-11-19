@@ -31,10 +31,15 @@ export function Button({
 /* ---------------- moving by drag and drop ---------------- */
 // Drag file cards and folder tiles onto a folder (tile, sidebar row or path crumb) to move them there.
 
-const DRAG_TYPE = 'application/x-moonlib-move';
+export const DRAG_TYPE = 'application/x-moonlib-move';
 export type DragLoad = { items: string[]; folders: string[] };
 
+let dragFrom = '';
+/** Did the drag under way start on the page that's showing now? */
+export const draggedFromHere = () => dragFrom === location.hash;
+
 export function startDrag(e: React.DragEvent, load: DragLoad) {
+  dragFrom = location.hash;
   e.dataTransfer.setData(DRAG_TYPE, JSON.stringify(load));
   e.dataTransfer.effectAllowed = 'move';
   const n = load.items.length + load.folders.length;
@@ -702,6 +707,7 @@ export function FolderTile({ folder, count, onOpen, menu }: { folder: Folder; co
   return (
     <div
       className={`folder${over ? ' drop-on' : ''}`}
+      data-spring={`folder:${folder.id}`}
       tabIndex={0}
       onClick={onOpen}
       onKeyDown={(e) => e.key === 'Enter' && onOpen()}
@@ -731,7 +737,7 @@ function Crumb({ id, label }: { id: string | null; label: string }) {
   const { go } = useStore();
   const { over, dropProps } = useMoveDrop(id, label);
   return (
-    <button className={over ? 'drop-on' : undefined} onClick={() => go({ page: 'folder', id })} {...dropProps}>
+    <button className={over ? 'drop-on' : undefined} data-spring={`folder:${id ?? ''}`} onClick={() => go({ page: 'folder', id })} {...dropProps}>
       {label}
     </button>
   );
