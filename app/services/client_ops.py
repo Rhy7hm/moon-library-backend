@@ -24,7 +24,8 @@ Removing a share never deletes the file. Permanently deleting a file or folder r
   clients.delete     { id, withFolder? = true }  moves the client to the Trash: logins stop working, shares are
                      kept for a restore; with their folder (Clients › <client>) too, unless withFolder is false.
                      Restore / delete for good from the Trash handle the client and that folder together   (Owner)
-  clients.newFolder  { clientId, name, share? = true } → { id }   a folder in the client's home folder (Editor)
+  clients.newFolder  { clientId, name, share? = true, place? = 'home' | 'library' } → { id }   a folder in the client's home folder
+                     (default), or a brand-new top-level folder in the library; shared with the client unless share is false (Editor)
   clients.home       { clientId } → { id }   the client's home folder, made if it's missing (Editor)
   shares.add         { clientId, folderIds?, itemIds?, links?: [{ url, title }], expiresAt? } → { added, skipped }
                      expiresAt (ms, or null for no end date) also applies to any of these already shared
@@ -162,8 +163,12 @@ def clients_home(user: SessionUser, b: dict):
 def clients_new_folder(user: SessionUser, b: dict):
     c = _client(b.get("clientId"))
     name = _text(b.get("name"), "Name", 200, required=True)
-    home = ensure_home(c["id"], user.username)
-    fid = admin_ops.folder_create(admin_ops.Ctx(user.username), {"parentId": home, "name": {"en": name}})["id"]
+    place = b.get("place", "home")
+    if place not in ("home", "library"):
+        raise HttpError(400, "place must be home or library")
+    # "library": a brand-new top-level folder, apart from the client's home folder; only this folder is shared with them
+    parent = ensure_home(c["id"], user.username) if place == "home" else None
+    fid = admin_ops.folder_create(admin_ops.Ctx(user.username), {"parentId": parent, "name": {"en": name}})["id"]
     shared = b.get("share", True) is not False
     if shared:
         q.run(
@@ -173,7 +178,7 @@ def clients_new_folder(user: SessionUser, b: dict):
         limit_shared_folders([fid], user)  # shared with a client = for the Owners
     write_log(user, {
         "kind": "content", "action": "clients.newFolder", "folderId": fid,
-        "summary": f"Created “{name}” in {c['name']}’s folder" + (f" and shared it with {c['name']}" if shared else ""),
+        "summary": (f"Created “{name}” in {c['name']}’s folder" if place == "home" else f"Created the library folder “{name}” for {c['name']}") + (f" and shared it with {c['name']}" if shared else ""),
     })
     return {"id": fid}
 

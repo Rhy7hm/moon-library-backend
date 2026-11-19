@@ -4,14 +4,15 @@
  * decides what that is, makes their logins, and sees the files they sent ("From the client").
  * Each client has a folder in the library (Clients › <client>); "New folder" here makes one inside it.
  */
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { errText, fileUrl, mainFile, nameOf, op, titleOf, type Asset, type Client, type ClientLogin, type Folder, type Share } from './api';
 import { encodeAvatar } from './avatar-encode';
 import { fmtAgo, fmtDate } from './format';
 import { IBriefcase, ICheck, IChevR, IClock, IDownload, IExternal, IFolder, IImage, IKey, ILink, IPencil, IPlus, ISearch, IShare, ITrash, IUpload, IUsers, IX } from './icons';
 import { useFileDrop, useStore } from './store';
 import { AssetCard, Button, ConfirmDialog, CopyButton, Dialog, Empty, FolderGlyph, MenuButton, PageHeader, Segmented, Thumb, type MenuItem } from './ui';
-import { useActions } from './library';
+import { download, downloadZip, useActions } from './library';
+import { useMarquee } from './marquee';
 
 const COLORS = ['#0a84ff', '#30b0c7', '#34c759', '#ff9f0a', '#ff375f', '#bf5af2', '#5e5ce6', '#8e8e93'];
 const initials = (name: string) =>
@@ -127,17 +128,18 @@ export function UntilPicker({ value, onChange }: { value: number | null; onChang
 }
 
 /** Change (or clear) the end date of a share. */
-function UntilDialog({ c, sh, label, onClose }: { c: Client; sh: Share; label: string; onClose: () => void }) {
+function UntilDialog({ c, shs, label, onClose }: { c: Client; shs: Share[]; label: string; onClose: () => void }) {
   const s = useStore();
-  const [v, setV] = useState<number | null>(sh.expiresAt && !ended(sh) ? sh.expiresAt : null);
+  const first = shs[0];
+  const [v, setV] = useState<number | null>(shs.length === 1 && first.expiresAt && !ended(first) ? first.expiresAt : null);
   return (
     <Dialog
-      title={`How long can ${c.name} see “${label}”?`}
+      title={`How long can ${c.name} see ${shs.length > 1 ? `these ${shs.length} files` : `“${label}”`}?`}
       onClose={onClose}
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button kind="primary" onClick={async () => (await s.run('shares.expire', { clientId: c.id, ids: [sh.id], expiresAt: v }, v ? 'End date set' : 'End date removed')) && onClose()}>
+          <Button kind="primary" onClick={async () => (await s.run('shares.expire', { clientId: c.id, ids: shs.map((x) => x.id), expiresAt: v }, v ? 'End date set' : 'End date removed')) && onClose()}>
             Save
           </Button>
         </>
@@ -283,7 +285,28 @@ function ClientBody({ c, onEdit, onAdd, onNewFolder, onDelete, modals }: { c: Cl
   const items = c.shares.filter((x) => x.kind === 'item');
   const links = c.shares.filter((x) => x.kind === 'link');
   const remove = (sh: Share, label: string) => s.run('shares.remove', { clientId: c.id, ids: [sh.id] }, `Stopped sharing “${label}”`);
-  const [until, setUntil] = useState<{ sh: Share; label: string } | null>(null);
+  const [until, setUntil] = useState<{ shs: Share[]; label: string } | null>(null);
+  // drag a box over the shared files (or click, ⌘/Shift-click) to pick several at once
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  useMarquee(sel, setSel);
+  useEffect(() => setSel(new Set()), [c.id]);
+  const itemAsset = (sh: Share) => (sh.targetId ? s.tree?.items.find((x) => x.id === sh.targetId) : undefined);
+  const pickable = items.filter((sh) => itemAsset(sh));
+  const picked = pickable.filter((sh) => sel.has(sh.targetId!));
+  const toggle = (id: string) => setSel((p) => (p.has(id) ? new Set([...p].filter((x) => x !== id)) : new Set([...p, id])));
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && sel.size && !document.querySelector('.scrim, .spotlight') && !(e.target instanceof Element && e.target.closest('input, textarea, select'))) setSel(new Set());
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [sel]);
+  const stopMany = (list: Share[]) => {
+    const ids = list.map((x) => x.id);
+    const targets = list.map((x) => x.targetId!).filter(Boolean);
+    setSel(new Set());
+    return s.run('shares.remove', { clientId: c.id, ids }, `Stopped sharing ${list.length} file${list.length === 1 ? '' : 's'}`, () => s.run('shares.add', { clientId: c.id, itemIds: targets }));
+  };
   const home = c.homeFolderId ? s.byId.get(c.homeFolderId) : undefined;
   const inbox = c.inboxFolderId ? s.byId.get(c.inboxFolderId) : undefined;
   const { folderMenu, dialogs: folderDialogs } = useActions();
@@ -305,7 +328,7 @@ function ClientBody({ c, onEdit, onAdd, onNewFolder, onDelete, modals }: { c: Cl
   const sharedMenu = (sh: Share, f: Folder | undefined): MenuItem[] => [
     ...(s.canEdit
       ? ([
-          ...(f ? [{ label: sh.expiresAt ? 'Change end date…' : 'Set end date…', icon: <IClock />, onClick: () => setUntil({ sh, label: nameOf(f) }) }] : []),
+          ...(f ? [{ label: sh.expiresAt ? 'Change end date…' : 'Set end date…', icon: <IClock />, onClick: () => setUntil({ shs: [sh], label: nameOf(f) }) }] : []),
           { label: `Stop sharing with ${c.name}`, icon: <IX />, danger: true, onClick: () => remove(sh, f ? nameOf(f) : 'folder') },
         ] as MenuItem[])
       : []),
@@ -396,14 +419,14 @@ function ClientBody({ c, onEdit, onAdd, onNewFolder, onDelete, modals }: { c: Cl
                   const a = s.tree?.items.find((x) => x.id === sh.targetId);
                   const menu: MenuItem[] = s.canEdit
                     ? [
-                        { label: sh.expiresAt ? 'Change end date…' : 'Set end date…', icon: <IClock />, onClick: () => setUntil({ sh, label: a ? titleOf(a) : 'file' }) },
+                        { label: sh.expiresAt ? 'Change end date…' : 'Set end date…', icon: <IClock />, onClick: () => setUntil({ shs: [sh], label: a ? titleOf(a) : 'file' }) },
                         'sep',
                         { label: 'Stop sharing', icon: <IX />, danger: true, onClick: () => remove(sh, a ? titleOf(a) : 'file') },
                       ]
                     : [];
                   return a ? (
                     <div key={sh.id} className={`share-card${a.deletedAt || ended(sh) ? ' is-trashed' : ''}`}>
-                      <AssetCard asset={a} selected={false} selecting={false} onToggle={() => s.openSheet(a.id)} onOpen={() => s.openSheet(a.id)} menu={menu} where={a.deletedAt ? 'In Trash — not shown' : s.path(a.folderId).map(nameOf).join(' › ')} />
+                      <AssetCard asset={a} selected={sel.has(a.id)} selecting={sel.size > 0} onToggle={() => toggle(a.id)} onOpen={() => s.openSheet(a.id)} menu={menu} where={a.deletedAt ? 'In Trash — not shown' : s.path(a.folderId).map(nameOf).join(' › ')} />
                       <UntilBadge sh={sh} />
                     </div>
                   ) : null;
@@ -427,7 +450,7 @@ function ClientBody({ c, onEdit, onAdd, onNewFolder, onDelete, modals }: { c: Cl
                       <small>{sh.url}</small>
                     </span>
                     {s.canEdit && (
-                      <button className="icon-btn" aria-label="Set end date" title={sh.expiresAt ? 'Change end date' : 'Set end date'} onClick={() => setUntil({ sh, label: sh.title || 'link' })}>
+                      <button className="icon-btn" aria-label="Set end date" title={sh.expiresAt ? 'Change end date' : 'Set end date'} onClick={() => setUntil({ shs: [sh], label: sh.title || 'link' })}>
                         <IClock />
                       </button>
                     )}
@@ -457,7 +480,32 @@ function ClientBody({ c, onEdit, onAdd, onNewFolder, onDelete, modals }: { c: Cl
       )}
       {modals}
       {folderDialogs}
-      {until && <UntilDialog c={c} sh={until.sh} label={until.label} onClose={() => setUntil(null)} />}
+      {picked.length > 0 && (
+        <div className="selbar" role="toolbar" aria-label="Selection">
+          <button className="icon-btn" aria-label="Clear selection" onClick={() => setSel(new Set())}>
+            <IX />
+          </button>
+          <strong>{picked.length} selected</strong>
+          <Button size="sm" kind="plain" onClick={() => setSel(new Set(pickable.map((sh) => sh.targetId!)))}>
+            Select all
+          </Button>
+          <span className="selbar-gap" />
+          <Button size="sm" icon={<IDownload />} onClick={() => (picked.length === 1 ? download(itemAsset(picked[0])!) : downloadZip(picked.map((sh) => itemAsset(sh)!)))}>
+            {picked.length === 1 ? 'Download' : 'Download ZIP'}
+          </Button>
+          {s.canEdit && (
+            <>
+              <Button size="sm" icon={<IClock />} onClick={() => setUntil({ shs: picked, label: titleOf(itemAsset(picked[0])!) })}>
+                End date
+              </Button>
+              <Button size="sm" kind="danger" icon={<IX />} onClick={() => stopMany(picked)}>
+                Stop sharing
+              </Button>
+            </>
+          )}
+        </div>
+      )}
+      {until && <UntilDialog c={c} shs={until.shs} label={until.label} onClose={() => setUntil(null)} />}
     </div>
   );
 }
@@ -755,13 +803,28 @@ function ClientFolderDialog({ c, onClose }: { c: Client; onClose: () => void }) 
   const [name, setName] = useState('');
   const [share, setShare] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [place, setPlace] = useState<'home' | 'library'>(() => {
+    try {
+      return localStorage.getItem('moonlib.clientFolderPlace') === 'library' ? 'library' : 'home';
+    } catch {
+      return 'home';
+    }
+  });
   const home = c.homeFolderId ? s.byId.get(c.homeFolderId) : undefined;
-  const where = [...(home ? s.path(home.id).map(nameOf) : ['Clients', c.name])].join(' › ');
+  const where = place === 'library' ? 'Library' : [...(home ? s.path(home.id).map(nameOf) : ['Clients', c.name])].join(' › ');
+  const choose = (v: 'home' | 'library') => {
+    setPlace(v);
+    try {
+      localStorage.setItem('moonlib.clientFolderPlace', v);
+    } catch {
+      /* private mode */
+    }
+  };
   const submit = async () => {
     const v = name.trim();
     if (!v || busy) return;
     setBusy(true);
-    const r = await s.run<{ id: string }>('clients.newFolder', { clientId: c.id, name: v, share }, share ? `Created “${v}” and shared it with ${c.name}` : `Created “${v}”`);
+    const r = await s.run<{ id: string }>('clients.newFolder', { clientId: c.id, name: v, share, place }, share ? `Created “${v}” and shared it with ${c.name}` : `Created “${v}”`);
     setBusy(false);
     if (r?.id) {
       onClose();
@@ -786,6 +849,19 @@ function ClientFolderDialog({ c, onClose }: { c: Client; onClose: () => void }) 
           <span>Folder name</span>
           <input autoFocus value={name} placeholder="e.g. CNY 2027" onChange={(e) => setName(e.target.value)} />
         </label>
+        <div className="field">
+          <span>Put it in</span>
+          <Segmented
+            label="Where the folder goes"
+            value={place}
+            onChange={choose}
+            options={[
+              { value: 'home', label: `${c.name}’s folder`, title: 'Inside this client’s own folder, with their other folders' },
+              { value: 'library', label: 'The library', title: 'A new top-level folder, on its own' },
+            ]}
+          />
+          <small>{place === 'library' ? 'A new folder on its own at the top of the library. Only this folder is shared with them.' : 'Kept with the rest of their folders.'}</small>
+        </div>
         <p className="client-folder-where">
           <IFolder /> {where} › <b>{name.trim() || 'New folder'}</b>
         </p>

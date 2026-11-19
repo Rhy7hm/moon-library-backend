@@ -32,7 +32,7 @@ const save = (k: string, v: string) => {
   }
 };
 
-function download(asset: Asset) {
+export function download(asset: Asset) {
   const f = mainFile(asset);
   if (!f) return;
   const a = document.createElement('a');
@@ -44,7 +44,7 @@ function download(asset: Asset) {
 }
 
 /** Several files as one ZIP of the originals, streamed by the server. */
-function downloadZip(assets: Asset[]) {
+export function downloadZip(assets: Asset[]) {
   const ids = assets.map((a) => mainFile(a)?.id).filter(Boolean).join(',');
   const name = `Moon Library ${new Date().toISOString().slice(0, 10)}`;
   window.location.href = `/zip?v=${ids}&o=1&name=${encodeURIComponent(name)}`;

@@ -115,3 +115,13 @@ def test_clients_home_returns_or_remakes_their_folder(owner):
     op(owner, "trash", {"folderIds": [home]})
     again = op(owner, "clients.home", {"clientId": cid})["id"]
     assert again != home and path_of(tree(owner), again) == ["Clients", "Acme"]
+
+
+def test_a_folder_for_a_client_can_be_a_new_top_level_library_folder(owner):
+    cid = op(owner, "clients.create", {"name": "Acme"})["id"]
+    fid = op(owner, "clients.newFolder", {"clientId": cid, "name": "Four videos", "place": "library"})["id"]
+    assert path_of(tree(owner), fid) == ["Four videos"]  # top level, not inside Clients › Acme
+    assert [(s["kind"], s["targetId"]) for s in client(owner, cid)["shares"]] == [("folder", fid)]
+    op(owner, "clients.newFolder", {"clientId": cid, "name": "Team only", "place": "library", "share": False})
+    assert len(client(owner, cid)["shares"]) == 1
+    op(owner, "clients.newFolder", {"clientId": cid, "name": "x", "place": "elsewhere"}, status=400)
