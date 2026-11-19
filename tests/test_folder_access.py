@@ -120,3 +120,51 @@ def test_the_activity_log_hides_what_happened_inside(owner, app):
     entry = next(e for e in op(owner, "audit.list", {"kind": "content"})["entries"] if e["action"] == "folder.access")
     assert "CLIENT (MKT)" in entry["summary"]
     op(dc, "audit.undo", {"id": entry["id"]}, status=404)
+
+
+def test_a_folder_shared_with_a_client_is_for_owners_only(owner, app):
+    from tests.conftest import sql
+
+    shared = folder(owner, "Ari Hubs")
+    plain = folder(owner, "Designs")
+    sub = folder(owner, "Posters", shared)
+    ed, ec = sign_in(app, "designer", "editor")
+    cid = op(owner, "clients.create", {"name": "Ari Hubs"})["id"]
+    op(owner, "shares.add", {"clientId": cid, "folderIds": [shared]})
+    ids = {f["id"] for f in tree(ec)["folders"]}
+    assert shared not in ids and sub not in ids and plain in ids  # gone for the designer, sub-folders too
+    assert shared in {f["id"] for f in tree(owner)["folders"]}
+    assert next(f for f in tree(owner)["folders"] if f["id"] == shared)["access"] == []
+    # a folder made for the client from its page is limited as well
+    new = op(owner, "clients.newFolder", {"clientId": cid, "name": "Reels"})["id"]
+    assert new not in {f["id"] for f in tree(ec)["folders"]}
+    # one an Owner already limited to chosen people keeps that list
+    mine = folder(owner, "Mine")
+    op(owner, "folder.access", {"id": mine, "restricted": True, "userIds": [ed]})
+    op(owner, "shares.add", {"clientId": cid, "folderIds": [mine]})
+    assert next(f for f in tree(owner)["folders"] if f["id"] == mine)["access"] == [ed]
+
+
+def test_an_editor_who_shares_a_folder_keeps_seeing_it(owner, app):
+    mkt, mc = sign_in(app, "marketer", "editor")
+    _, dc = sign_in(app, "designer", "editor")
+    f = folder(mc, "For client")
+    cid = op(owner, "clients.create", {"name": "Acme"})["id"]
+    op(mc, "shares.add", {"clientId": cid, "folderIds": [f]})
+    assert f in {x["id"] for x in tree(mc)["folders"]}
+    assert f not in {x["id"] for x in tree(dc)["folders"]}
+
+
+def test_command_limits_folders_that_were_already_shared(owner, app):
+    from tests.conftest import run_sql
+
+    f = folder(owner, "Old share")
+    cid = op(owner, "clients.create", {"name": "Acme"})["id"]
+    op(owner, "shares.add", {"clientId": cid, "folderIds": [f]})
+    run_sql(app, "UPDATE folders SET restricted = 0 WHERE id = ?", f)  # as it was before this feature
+    _, dc = sign_in(app, "designer", "editor")
+    assert f in {x["id"] for x in tree(dc)["folders"]}
+    r = app.test_cli_runner().invoke(args=["limit-shared-folders"])
+    assert r.exit_code == 0 and "Old share" in r.output and "now limited" in r.output
+    assert f not in {x["id"] for x in tree(dc)["folders"]}
+    assert "Nothing to do" in app.test_cli_runner().invoke(args=["limit-shared-folders"]).output

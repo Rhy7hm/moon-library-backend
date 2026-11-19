@@ -5,6 +5,7 @@ Command-line tasks (run with `flask --app wsgi <command>` from the backend folde
   flask backup status               the backup status as JSON
   flask cleanup                     empty Trash / old versions older than 90 days now
   flask create-owner                create the first Owner account (prompts for the password)
+  flask limit-shared-folders        limit every folder already shared with a client to the Owners (--dry-run to preview)
   flask create-superadmin           create the Super admin (prompts for the password); --promote ID makes an
                                     existing account the Super admin instead
 """
@@ -80,6 +81,27 @@ def register_cli(app: Flask) -> None:
         )
         write_log({"id": uid, "username": username}, {"kind": "security", "action": "user.setup", "summary": f"{name.strip() or username} created an Owner account (command line)"}, with_request=False)
         click.echo(f"Owner “{username}” created.")
+
+    @app.cli.command("limit-shared-folders")
+    @click.option("--dry-run", is_flag=True, help="Only list what would be limited.")
+    def limit_shared(dry_run: bool):
+        """Folders shared with a client are for the Owners: limit the ones already shared (new shares are limited automatically)."""
+        from .access import limit_shared_folders
+        from .db import q
+        from .services.activity import en
+
+        rows = q.all(
+            """SELECT DISTINCT f.id, f.name FROM client_shares s JOIN folders f ON f.id = s.target_id
+                WHERE s.kind = 'folder' AND f.deleted_at IS NULL AND f.restricted = 0 ORDER BY f.name"""
+        )
+        if not rows:
+            click.echo("Nothing to do: every shared folder is already limited.")
+            return
+        for r in rows:
+            click.echo(f"  {'would limit' if dry_run else 'limiting'}  {en(r['name'])}")
+        if not dry_run:
+            limit_shared_folders([r["id"] for r in rows])
+        click.echo(f"{len(rows)} folder{'s' if len(rows) != 1 else ''} {'would be' if dry_run else 'now'} limited to Owners. Open one's ••• menu → Who can open… to add people.")
 
     @app.cli.command("create-superadmin")
     @click.option("--promote", default=None, help="Make this existing account (its sign-in ID) the Super admin instead.")

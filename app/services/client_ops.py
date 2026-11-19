@@ -41,6 +41,7 @@ import re
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
+from ..access import limit_shared_folders
 from ..auth import SessionUser, at_least, hash_password, random_password, write_log
 from ..avatar import decode_image_b64
 from ..db import UPSERT_SETTING, in_list, q
@@ -169,6 +170,7 @@ def clients_new_folder(user: SessionUser, b: dict):
             "INSERT INTO client_shares (id, client_id, kind, target_id, url, title, created_at, created_by) VALUES (?,?,?,?,?,?,?,?)",
             new_id(), c["id"], "folder", fid, None, None, now(), user.username,
         )
+        limit_shared_folders([fid], user)  # shared with a client = for the Owners
     write_log(user, {
         "kind": "content", "action": "clients.newFolder", "folderId": fid,
         "summary": f"Created “{name}” in {c['name']}’s folder" + (f" and shared it with {c['name']}" if shared else ""),
@@ -348,6 +350,7 @@ def shares_add(user: SessionUser, b: dict):
             names.append(title)
     if rows:
         q.batch([("INSERT INTO client_shares (id, client_id, kind, target_id, url, title, created_at, created_by, expires_at) VALUES (?,?,?,?,?,?,?,?,?)", [*r, t, user.username, expires]) for r in rows])
+        limit_shared_folders([r[3] for r in rows if r[2] == "folder"], user)  # shared with a client = for the Owners
         n_f = sum(1 for r in rows if r[2] == "folder")
         n_i = sum(1 for r in rows if r[2] == "item")
         n_l = sum(1 for r in rows if r[2] == "link")

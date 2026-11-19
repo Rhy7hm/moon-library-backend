@@ -1073,7 +1073,7 @@ function SharePicker({ client, onClose }: { client: Client; onClose: () => void 
       onClose={onClose}
       footer={
         <>
-          <span className="muted small footer-note">{tab === 'library' ? (count ? `${count} selected` : 'Pick folders or files') : 'Canva, Google Drive, YouTube, a website…'}</span>
+          <span className="muted small footer-note">{tab === 'library' ? (count ? `${count} selected · shared folders are for Owners only` : 'Pick folders or files') : 'Canva, Google Drive, YouTube, a website…'}</span>
           <Button onClick={onClose}>Cancel</Button>
           <Button kind="primary" disabled={tab === 'library' ? !count : !url.trim()} onClick={share}>
             Share
@@ -1202,6 +1202,7 @@ export function ShareWithClients({ kind, id, ids, label, onClose }: { kind: 'fol
           })}
         </div>
       )}
+      {s.clients.length > 0 && kind === 'folder' && <p className="muted small">Folders shared with a client are only visible to Owners. Open a folder’s ••• → Who can open… to let an Editor see one.</p>}
       {s.clients.length > 0 && <UntilPicker value={expires} onChange={setExpires} />}
     </Dialog>
   );

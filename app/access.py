@@ -111,3 +111,26 @@ def key_allowed(user, key: str) -> bool:
         *([key] * 6),
     )
     return not any(r["folder_id"] in blocked for r in rows)
+
+
+def limit_shared_folders(folder_ids, sharer=None) -> list[str]:
+    """
+    A folder shared with a client is for the Owners (the marketing team): it's limited to them, so Editors and
+    Viewers no longer see it. If an Editor or Viewer is the one sharing it, they stay on its list so it doesn't
+    vanish from them. Folders already limited are left exactly as they are (an Owner's choice wins).
+    Returns the folders that were limited just now.
+    """
+    ids = [x for x in dict.fromkeys(folder_ids) if x]
+    if not ids:
+        return []
+    changed: list[str] = []
+    for i in range(0, len(ids), 500):
+        part = ids[i : i + 500]
+        changed += [r["id"] for r in q.all(f"SELECT id FROM folders WHERE restricted = 0 AND deleted_at IS NULL AND id IN ({in_list(len(part))})", *part)]
+    if not changed:
+        return []
+    stmts = [(f"UPDATE folders SET restricted = 1 WHERE id IN ({in_list(len(changed))})", changed)]
+    if sharer is not None and sharer.role not in SEES_ALL:
+        stmts += [("INSERT IGNORE INTO folder_access (folder_id, user_id) VALUES (?, ?)", [fid, sharer.id]) for fid in changed]
+    q.batch(stmts)
+    return changed
