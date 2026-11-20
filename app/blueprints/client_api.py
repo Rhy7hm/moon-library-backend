@@ -217,6 +217,19 @@ def _scope(client_id: str) -> dict:
         got = q.all(f"SELECT id, folder_id, title, created_at, status FROM items WHERE deleted_at IS NULL AND status != 'draft' AND id IN ({in_list(len(direct_items))})", *direct_items)
         seen = {i["id"] for i in items}
         items += [dict(i, direct=True) for i in got if i["id"] not in seen and not trashed(i["folder_id"])]
+    # shortcuts in shared folders: the original file, shown in the folder it was added to
+    if in_scope:
+        ids = list(in_scope)
+        seen = {i["id"] for i in items}
+        for r in q.all(
+            f"""SELECT l.folder_id AS link_folder, i.id, i.folder_id, i.title, i.created_at, i.status FROM item_links l JOIN items i ON i.id = l.item_id
+                 WHERE i.deleted_at IS NULL AND i.status != 'draft' AND l.folder_id IN ({in_list(len(ids))}) ORDER BY l.created_at""",
+            *ids,
+        ):
+            if r["id"] in seen or trashed(r["folder_id"]):
+                continue
+            seen.add(r["id"])
+            items.append({"id": r["id"], "folder_id": r["link_folder"], "title": r["title"], "created_at": r["created_at"], "status": r["status"]})
     links = [{"id": s["id"], "title": s["title"], "url": s["url"], "createdAt": s["created_at"]} for s in shares if s["kind"] == "link"]
     return {"folders": in_scope, "roots": roots, "items": items, "links": links}
 

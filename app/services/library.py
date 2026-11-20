@@ -82,6 +82,15 @@ def load_library(asset_base: str, blocked: set | frozenset = frozenset(), with_a
         for r in q.all("SELECT fa.folder_id, fa.user_id FROM folder_access fa JOIN users u ON u.id = fa.user_id"):
             who.setdefault(r["folder_id"], []).append(r["user_id"])
 
+    # shortcuts: files that also appear in another folder (no copy); only where both ends are visible to this person
+    live_items = {r["id"] for r in item_rows}
+    live_folders = {r["id"] for r in folder_rows}
+    links = [
+        {"folderId": r["folder_id"], "itemId": r["item_id"]}
+        for r in q.all("SELECT folder_id, item_id FROM item_links ORDER BY created_at")
+        if r["folder_id"] in live_folders and r["item_id"] in live_items
+    ]
+
     folders = []
     for r in folder_rows:
         f = {
@@ -150,7 +159,7 @@ def load_library(asset_base: str, blocked: set | frozenset = frozenset(), with_a
 
     items.sort(key=cmp_to_key(default_item_order))
     tags = [{"id": r["id"], "name": r["name"], "color": r["color"]} for r in tag_rows]
-    return {"folders": folders, "items": items, "tags": tags, "assetBase": asset_base, "generatedAt": now()}
+    return {"folders": folders, "items": items, "links": links, "tags": tags, "assetBase": asset_base, "generatedAt": now()}
 
 
 def file_keys(r: dict) -> list[str]:

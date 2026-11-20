@@ -25,9 +25,10 @@ from ..auth import check_origin, get_user, powers, require_power, require_user, 
 from ..services import activity
 from ..services.admin_ops import OPS, Ctx, check_key, http_meta, loose_folder_id
 from ..services.library import load_library
-from ..services.client_ops import CLIENT_OPS
+from ..services.client_ops import CLIENT_OPS, client_spaces
 from ..services.manage_ops import MANAGE_OPS, pins_of
 from ..services.tag_ops import TAG_OPS
+from ..services.link_ops import LINK_OPS
 from ..storage import storage
 from ..util import HttpError, json_response
 
@@ -49,7 +50,8 @@ def admin_get(op: str):
         log.exception("cleanup")
     data = load_library(asset_base=current_app.config["ASSET_BASE"], blocked=blocked_folders(user), with_access=user.role in ("owner", "superadmin"))
     data["user"] = {"id": user.id, "username": user.username, "name": user.name, "role": user.role, "pins": pins_of(user.id), "powers": powers(user.role)}
-    data["looseFolderId"] = loose_folder_id()  # "Unsorted": shown as files at the top of the Library
+    data["looseFolderId"] = loose_folder_id()
+    data["clientSpaces"] = client_spaces()  # clients' own spaces: shown under each client, not in the Library  # "Unsorted": shown as files at the top of the Library
     return json_response(data, headers={"Cache-Control": "no-store"})
 
 
@@ -65,7 +67,7 @@ def admin_post(op: str):
     user = require_user(need)
     guard_request(user, op, body)  # nothing can be changed inside a folder this person can't open
 
-    manage = MANAGE_OPS.get(op) or CLIENT_OPS.get(op) or TAG_OPS.get(op)
+    manage = MANAGE_OPS.get(op) or CLIENT_OPS.get(op) or TAG_OPS.get(op) or LINK_OPS.get(op)
     if manage:
         result = manage(user, body)
         return json_response(result if result is not None else {"ok": True})

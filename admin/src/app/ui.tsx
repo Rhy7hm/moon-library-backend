@@ -106,6 +106,61 @@ export function useMoveDrop(target: string | null, label: string) {
   return { over, dropProps };
 }
 
+/**
+ * Props that make an element a place to drop dragged files as shortcuts: they show up in that folder too and stay
+ * where they are (a client's own folder). Folders dragged here are left alone.
+ */
+export function useLinkDrop(target: string | null | undefined, label: string) {
+  const s = useStore();
+  const [over, setOver] = useState(false);
+  const depth = useRef(0);
+  if (!target || !s.canEdit) return { over: false, dropProps: {} };
+  const has = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes(DRAG_TYPE);
+  const dropProps = {
+    onDragEnter: (e: React.DragEvent) => {
+      if (!has(e)) return;
+      e.preventDefault();
+      depth.current++;
+      setOver(true);
+    },
+    onDragOver: (e: React.DragEvent) => {
+      if (!has(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'link';
+    },
+    onDragLeave: (e: React.DragEvent) => {
+      if (!has(e)) return;
+      depth.current = Math.max(0, depth.current - 1);
+      if (!depth.current) setOver(false);
+    },
+    onDrop: (e: React.DragEvent) => {
+      if (!has(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      depth.current = 0;
+      setOver(false);
+      endDrag();
+      let load: DragLoad;
+      try {
+        load = JSON.parse(e.dataTransfer.getData(DRAG_TYPE));
+      } catch {
+        return;
+      }
+      const here = s.linkedIn(target);
+      const ids = (load.items ?? []).filter((id) => !here.has(id) && s.assets.find((a) => a.id === id)?.folderId !== target);
+      if (!ids.length) return s.toast(load.items?.length ? `Already in “${label}”` : 'Only files can be added to a client’s folder');
+      void s.run('links.add', { folderId: target, itemIds: ids }, `Added ${ids.length} file${ids.length === 1 ? '' : 's'} to “${label}” — no copies made`, () => s.run('links.remove', { folderId: target, itemIds: ids }));
+    },
+  };
+  return { over, dropProps };
+}
+
+/** Is this folder inside a client's own space (where dropped files become shortcuts, not moves)? */
+export function useInClientSpace(id: string | null | undefined) {
+  const s = useStore();
+  return !!id && !!s.spaceRoot && s.path(id)[0]?.id === s.spaceRoot && s.path(id).length > 2;
+}
+
 /** Staff avatar: photo when set, otherwise the first letter of the name. */
 export function UserAvatar({
   user,
@@ -744,11 +799,27 @@ function Crumb({ id, label }: { id: string | null; label: string }) {
 }
 
 export function Crumbs({ id }: { id: string | null }) {
-  const { path } = useStore();
-  const p = path(id);
+  const { path, spaceRoot, clientOfSpace, clients, go } = useStore();
+  let p = path(id);
+  // in a client's own space the client is the top: Clients › Ari Hubs › Video 1-4
+  const inSpace = !!spaceRoot && p[0]?.id === spaceRoot;
+  const owner = inSpace && p[1] ? clients.find((c) => c.id === clientOfSpace.get(p[1].id)) : undefined;
+  if (inSpace) p = p.slice(owner ? 2 : 1);
   return (
     <nav className="crumbs" aria-label="Path">
-      <Crumb id={null} label="Library" />
+      {inSpace ? (
+        <>
+          <button data-spring="clients" onClick={() => go({ page: 'clients' })}>Clients</button>
+          {owner && (
+            <span>
+              <IChevR />
+              {p.length ? <button data-spring={`client:${owner.id}`} onClick={() => go({ page: 'client', id: owner.id })}>{owner.name}</button> : <b aria-current="page">{owner.name}</b>}
+            </span>
+          )}
+        </>
+      ) : (
+        <Crumb id={null} label="Library" />
+      )}
       {p.map((f, i) => (
         <span key={f.id}>
           <IChevR />

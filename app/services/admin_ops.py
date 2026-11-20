@@ -995,11 +995,16 @@ def bundled_folders(client_ids: list[str]) -> list[str]:
     """Clients' own folders (Clients › <client>) that went to the Trash together with them (same moment)."""
     if not client_ids:
         return []
+    ph = in_list(len(client_ids))
     return [
         r["id"]
         for r in q.all(
             f"""SELECT f.id FROM clients c JOIN folders f ON f.id = c.home_folder_id
-                 WHERE c.deleted_at IS NOT NULL AND f.deleted_at = c.deleted_at AND c.id IN ({in_list(len(client_ids))})""",
+                 WHERE c.deleted_at IS NOT NULL AND f.deleted_at = c.deleted_at AND c.id IN ({ph})
+                UNION
+                SELECT f.id FROM clients c JOIN settings st ON st.`key` = CONCAT('clients.space.', c.id) JOIN folders f ON f.id = st.value
+                 WHERE c.deleted_at IS NOT NULL AND f.deleted_at = c.deleted_at AND c.id IN ({ph})""",
+            *client_ids,
             *client_ids,
         )
     ]
@@ -1075,6 +1080,7 @@ def purge(ctx: Ctx, b: Body):
                 (f"DELETE FROM files WHERE item_id IN ({ph})", chunk),
                 (f"UPDATE folders SET cover_item_id = NULL WHERE cover_item_id IN ({ph})", chunk),
                 (f"DELETE FROM client_shares WHERE kind = 'item' AND target_id IN ({ph})", chunk),
+                (f"DELETE FROM item_links WHERE item_id IN ({ph})", chunk),  # its shortcuts go with it
                 (f"DELETE FROM items WHERE id IN ({ph})", chunk),
             ]
         )
@@ -1082,6 +1088,7 @@ def purge(ctx: Ctx, b: Body):
         icons = q.all(f"SELECT icon FROM folders WHERE icon LIKE ? AND id IN ({in_list(len(all_folders))})", "img:%", *all_folders)
         delete_storage([r["icon"][4:] for r in icons])
         q.run(f"DELETE FROM client_shares WHERE kind = 'folder' AND target_id IN ({in_list(len(all_folders))})", *all_folders)
+        q.run(f"DELETE FROM item_links WHERE folder_id IN ({in_list(len(all_folders))})", *all_folders)
         # children first, so no row ever points at a missing parent
         q.batch([("DELETE FROM folders WHERE id = ?", [fid]) for fid in reversed(all_folders)])
     out = {"ok": True, "items": len(item_ids), "folders": len(all_folders)}

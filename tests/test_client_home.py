@@ -125,3 +125,34 @@ def test_a_folder_for_a_client_can_be_a_new_top_level_library_folder(owner):
     op(owner, "clients.newFolder", {"clientId": cid, "name": "Team only", "place": "library", "share": False})
     assert len(client(owner, cid)["shares"]) == 1
     op(owner, "clients.newFolder", {"clientId": cid, "name": "x", "place": "elsewhere"}, status=400)
+
+
+def test_a_folder_in_the_clients_own_space(owner):
+    cid = op(owner, "clients.create", {"name": "Ari Hubs"})["id"]
+    fid = op(owner, "clients.newFolder", {"clientId": cid, "name": "Video 1-4", "place": "client"})["id"]
+    t = tree(owner)
+    spaces = t["clientSpaces"]
+    space = next(k for k, v in spaces["folders"].items() if v == cid)
+    assert path_of(t, fid) == ["Client spaces", "Ari Hubs", "Video 1-4"]
+    assert next(f for f in t["folders"] if f["id"] == space)["parentId"] == spaces["root"]
+    assert [(s["kind"], s["targetId"]) for s in client(owner, cid)["shares"]] == [("folder", fid)]
+    # a second folder goes into the same space; another client gets their own
+    again = op(owner, "clients.newFolder", {"clientId": cid, "name": "Drafts", "place": "client", "share": False})["id"]
+    assert path_of(tree(owner), again) == ["Client spaces", "Ari Hubs", "Drafts"]
+    other = op(owner, "clients.create", {"name": "Nuan"})["id"]
+    op(owner, "clients.newFolder", {"clientId": other, "name": "Posters", "place": "client"})
+    assert len(tree(owner)["clientSpaces"]["folders"]) == 2
+    # renaming the client renames their space
+    op(owner, "clients.update", {"id": cid, "name": "Ari Hubs Sdn Bhd"})
+    assert path_of(tree(owner), fid) == ["Client spaces", "Ari Hubs Sdn Bhd", "Video 1-4"]
+
+
+def test_the_space_goes_to_the_trash_and_comes_back_with_the_client(owner):
+    cid = op(owner, "clients.create", {"name": "Ari Hubs"})["id"]
+    fid = op(owner, "clients.newFolder", {"clientId": cid, "name": "Video 1-4", "place": "client"})["id"]
+    space = next(k for k, v in tree(owner)["clientSpaces"]["folders"].items() if v == cid)
+    op(owner, "clients.delete", {"id": cid, "withFolder": False})
+    assert next(f for f in tree(owner)["folders"] if f["id"] == space)["deletedAt"]
+    op(owner, "restore", {"folderIds": [], "itemIds": [], "clientIds": [cid]})
+    assert next(f for f in tree(owner)["folders"] if f["id"] == space)["deletedAt"] is None
+    assert path_of(tree(owner), fid) == ["Client spaces", "Ari Hubs", "Video 1-4"]

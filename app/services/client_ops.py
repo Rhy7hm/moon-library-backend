@@ -113,6 +113,10 @@ def _expiry(v):
 # ---------------------------------------------------------------- home folders: Clients › <client>
 
 ROOT_KEY = "clients.rootFolder"  # settings: the id of the top-level "Clients" folder
+# Each client's own space: folders that belong to the client alone (Clients › <client> › …), kept out of the
+# Library and the sidebar. They live in one hidden top-level folder, a sub-folder per client.
+SPACE_ROOT_KEY = "clients.spaceRoot"
+SPACE_KEY = "clients.space."  # + the client's id → their space folder
 
 
 def _live(fid: str | None) -> bool:
@@ -135,6 +139,39 @@ def _clients_root(by: str) -> str:
     return fid
 
 
+def _setting(key: str) -> str | None:
+    r = q.first("SELECT value FROM settings WHERE `key` = ?", key)
+    return r["value"] if r else None
+
+
+def _space_root(by: str) -> str:
+    fid = _setting(SPACE_ROOT_KEY)
+    if fid and _live(fid):
+        return fid
+    fid = admin_ops.folder_create(admin_ops.Ctx(by), {"parentId": None, "name": {"en": "Client spaces"}})["id"]
+    q.run(UPSERT_SETTING, SPACE_ROOT_KEY, fid, now(), by)
+    return fid
+
+
+def ensure_space(client_id: str, by: str) -> str:
+    """The client's own space (made the first time it's needed): folders made here belong to this client alone."""
+    c = q.first("SELECT id, name FROM clients WHERE id = ?", client_id)
+    if not c:
+        raise HttpError(404, "Client not found")
+    fid = _setting(SPACE_KEY + c["id"])
+    if fid and _live(fid):
+        return fid
+    fid = admin_ops.folder_create(admin_ops.Ctx(by), {"parentId": _space_root(by), "name": {"en": c["name"]}})["id"]
+    q.run(UPSERT_SETTING, SPACE_KEY + c["id"], fid, now(), by)
+    return fid
+
+
+def client_spaces() -> dict:
+    """For the admin: the hidden folder that holds the spaces, and which client each space belongs to."""
+    folders = {r["value"]: r["key"][len(SPACE_KEY):] for r in q.all("SELECT `key`, value FROM settings WHERE `key` LIKE ?", SPACE_KEY + "%")}
+    return {"root": _setting(SPACE_ROOT_KEY), "folders": folders}
+
+
 def ensure_home(client_id: str, by: str) -> str:
     """The client's home folder, made (under Clients) if it's missing or was deleted. Their inbox moves into it."""
     c = q.first("SELECT id, name, home_folder_id, inbox_folder_id FROM clients WHERE id = ?", client_id)
@@ -154,6 +191,9 @@ def _rename_home(c: dict, name: str) -> None:
     home = q.first("SELECT f.id, f.name FROM clients c JOIN folders f ON f.id = c.home_folder_id WHERE c.id = ?", c["id"])
     if home:
         admin_ops.folder_update(admin_ops.Ctx("system"), {"id": home["id"], "name": {**admin_ops._parse_name(home["name"]), "en": name}})
+    space = q.first("SELECT id, name FROM folders WHERE id = ?", _setting(SPACE_KEY + c["id"]) or "")
+    if space:  # their space is named after them too
+        admin_ops.folder_update(admin_ops.Ctx("system"), {"id": space["id"], "name": {**admin_ops._parse_name(space["name"]), "en": name}})
 
 
 def clients_home(user: SessionUser, b: dict):
@@ -164,10 +204,10 @@ def clients_new_folder(user: SessionUser, b: dict):
     c = _client(b.get("clientId"))
     name = _text(b.get("name"), "Name", 200, required=True)
     place = b.get("place", "home")
-    if place not in ("home", "library"):
-        raise HttpError(400, "place must be home or library")
-    # "library": a brand-new top-level folder, apart from the client's home folder; only this folder is shared with them
-    parent = ensure_home(c["id"], user.username) if place == "home" else None
+    if place not in ("home", "client", "library"):
+        raise HttpError(400, "place must be home, client or library")
+    # "client": in the client's own space (Clients › <client>), out of the Library; "library": a new top-level folder
+    parent = ensure_home(c["id"], user.username) if place == "home" else ensure_space(c["id"], user.username) if place == "client" else None
     fid = admin_ops.folder_create(admin_ops.Ctx(user.username), {"parentId": parent, "name": {"en": name}})["id"]
     shared = b.get("share", True) is not False
     if shared:
@@ -178,7 +218,7 @@ def clients_new_folder(user: SessionUser, b: dict):
         limit_shared_folders([fid], user)  # shared with a client = for the Owners
     write_log(user, {
         "kind": "content", "action": "clients.newFolder", "folderId": fid,
-        "summary": (f"Created “{name}” in {c['name']}’s folder" if place == "home" else f"Created the library folder “{name}” for {c['name']}") + (f" and shared it with {c['name']}" if shared else ""),
+        "summary": (f"Created “{name}” in {c['name']}’s folder" if place == "home" else f"Created “{name}” for {c['name']}" if place == "client" else f"Created the library folder “{name}” for {c['name']}") + (f" and shared it with {c['name']}" if shared else ""),
     })
     return {"id": fid}
 
@@ -292,11 +332,16 @@ def clients_delete(user: SessionUser, b: dict):
     with_folder = b.get("withFolder", True) is not False and home and _live(home)
     if with_folder:
         stmts.append(("UPDATE folders SET deleted_at = ? WHERE id = ?", [t, home]))
+    # their own space belongs to them alone: it always goes (and comes back) with them
+    space = _setting(SPACE_KEY + c["id"])
+    space = space if space and _live(space) else None
+    if space:
+        stmts.append(("UPDATE folders SET deleted_at = ? WHERE id = ?", [t, space]))
     q.batch(stmts)
     write_log(user, {
         "kind": "content", "action": "trash", "targetType": "client", "targetIds": [c["id"]],
         "summary": f"Deleted (moved to Trash) 👤 {c['name']}" + (" and their folder" if with_folder else ""),
-        "before": {"folderIds": [home] if with_folder else [], "itemIds": [], "clientIds": [c["id"]]},
+        "before": {"folderIds": ([home] if with_folder else []) + ([space] if space else []), "itemIds": [], "clientIds": [c["id"]]},
     })
     return {"ok": True, "withFolder": bool(with_folder)}
 

@@ -91,6 +91,14 @@ type Store = {
   /** a folder's files; null = the files at the top of the Library (kept in "Unsorted") */
   assetsIn: (id: string | null) => Asset[];
   looseFolderId: string | null;
+  /** the hidden folder holding clients' own spaces (kept out of the Library and the sidebar) */
+  spaceRoot: string | null;
+  /** which client a space folder belongs to */
+  clientOfSpace: Map<string, string>;
+  /** a client's own space folder, if they have one */
+  spaceOf: (clientId: string) => string | undefined;
+  /** files shown in a folder by a shortcut (they live elsewhere; nothing was copied) */
+  linkedIn: (folderId: string | null) => Set<string>;
   path: (id: string | null) => Folder[];
   reload: () => Promise<void>;
   route: Route;
@@ -216,6 +224,11 @@ export function StoreProvider({ me: meProp, onSignOut, children }: { me: Me; onS
       kids.set(k, [...(kids.get(k) ?? []), f]);
     }
     for (const l of kids.values()) l.sort((a, b) => a.sort - b.sort || a.createdAt - b.createdAt);
+    // clients' own spaces live under each client, not at the top of the Library
+    const spaceRoot = tree?.clientSpaces?.root ?? null;
+    if (spaceRoot) kids.set(null, (kids.get(null) ?? []).filter((f) => f.id !== spaceRoot));
+    const clientOfSpace = new Map(Object.entries(tree?.clientSpaces?.folders ?? {}));
+    const spaceOfClient = new Map([...clientOfSpace].map(([f, c]) => [c, f]));
     const deletedUp = (id: string | null): boolean => {
       for (let cur = id, guard = 0; cur && guard < 50; cur = byId.get(cur)?.parentId ?? null, guard++) if (byId.get(cur)?.deletedAt) return true;
       return false;
@@ -226,6 +239,17 @@ export function StoreProvider({ me: meProp, onSignOut, children }: { me: Me; onS
     const trashAssets = items.filter((a) => a.deletedAt && !deletedUp(a.folderId));
     const inFolder = new Map<string, Asset[]>();
     for (const a of assets) inFolder.set(a.folderId, [...(inFolder.get(a.folderId) ?? []), a]);
+    // shortcuts: a file shown in another folder too (no copy): it's listed there after the folder's own files
+    const linked = new Map<string, Set<string>>();
+    const byAsset = new Map(assets.map((a) => [a.id, a]));
+    for (const l of tree?.links ?? []) {
+      const a = byAsset.get(l.itemId);
+      if (!a || a.folderId === l.folderId) continue;
+      if (!linked.has(l.folderId)) linked.set(l.folderId, new Set());
+      linked.get(l.folderId)!.add(a.id);
+      inFolder.set(l.folderId, [...(inFolder.get(l.folderId) ?? []), a]);
+    }
+    const noLinks = new Set<string>();
     const path = (id: string | null) => {
       const out: Folder[] = [];
       for (let cur = id, guard = 0; cur && guard < 50; cur = byId.get(cur)?.parentId ?? null, guard++) {
@@ -245,6 +269,10 @@ export function StoreProvider({ me: meProp, onSignOut, children }: { me: Me; onS
       children: (id: string | null) => kids.get(id) ?? [],
       assetsIn: (id: string | null) => inFolder.get(id ?? loose ?? '') ?? [],
       looseFolderId: loose,
+      spaceRoot,
+      clientOfSpace,
+      spaceOf: (cid: string) => spaceOfClient.get(cid),
+      linkedIn: (fid: string | null) => (fid ? linked.get(fid) ?? noLinks : noLinks),
       path,
     };
   }, [tree]);

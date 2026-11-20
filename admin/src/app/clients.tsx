@@ -10,7 +10,7 @@ import { encodeAvatar } from './avatar-encode';
 import { fmtAgo, fmtDate } from './format';
 import { IBriefcase, ICheck, ILock, IChevR, IClock, IDownload, IExternal, IFolder, IImage, IKey, ILink, IPencil, IPlus, ISearch, IShare, ITrash, IUpload, IUsers, IX } from './icons';
 import { useFileDrop, useStore } from './store';
-import { DRAG_TYPE, type DragLoad, AssetCard, Button, ConfirmDialog, CopyButton, Dialog, Empty, FolderGlyph, MenuButton, PageHeader, Segmented, Thumb, type MenuItem } from './ui';
+import { DRAG_TYPE, type DragLoad, AssetCard, useLinkDrop, Button, ConfirmDialog, CopyButton, Dialog, Empty, FolderGlyph, MenuButton, PageHeader, Segmented, Thumb, type MenuItem } from './ui';
 import { download, downloadZip, useActions } from './library';
 import { useMarquee } from './marquee';
 
@@ -82,6 +82,8 @@ export const ended = (sh: Share) => !!sh.expiresAt && sh.expiresAt <= Date.now()
 function useShareDrop(c: Client | undefined) {
   const s = useStore();
   const [over, setOver] = useState(false);
+  // over one of the client's own folders: that folder takes the drop (as shortcuts), not the page
+  const [onFolder, setOnFolder] = useState(false);
   const depth = useRef(0);
   if (!c || !s.canEdit) return { over: false, dropProps: {} };
   const has = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes(DRAG_TYPE);
@@ -96,11 +98,13 @@ function useShareDrop(c: Client | undefined) {
       if (!has(e)) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'copy';
+      const f = e.target instanceof Element && !!e.target.closest('[data-link-drop]');
+      if (f !== onFolder) setOnFolder(f);
     },
     onDragLeave: (e: React.DragEvent) => {
       if (!has(e)) return;
       depth.current = Math.max(0, depth.current - 1);
-      if (!depth.current) setOver(false);
+      if (!depth.current) (setOver(false), setOnFolder(false));
     },
     onDrop: (e: React.DragEvent) => {
       if (!has(e)) return;
@@ -108,6 +112,7 @@ function useShareDrop(c: Client | undefined) {
       e.stopPropagation();
       depth.current = 0;
       setOver(false);
+      setOnFolder(false);
       let load: DragLoad;
       try {
         load = JSON.parse(e.dataTransfer.getData(DRAG_TYPE));
@@ -128,7 +133,7 @@ function useShareDrop(c: Client | undefined) {
       });
     },
   };
-  return { over, dropProps };
+  return { over: over && !onFolder, dropProps };
 }
 const endOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59).getTime();
 const dateInput = (ms: number) => {
@@ -366,6 +371,10 @@ function ClientBody({ c, onEdit, onAdd, onNewFolder, onDelete, modals }: { c: Cl
   };
   const home = c.homeFolderId ? s.byId.get(c.homeFolderId) : undefined;
   const inbox = c.inboxFolderId ? s.byId.get(c.inboxFolderId) : undefined;
+  // folders in the client's own space that aren't shared yet (made with "Share now" off)
+  const space = s.spaceOf(c.id);
+  const sharedIds = new Set(folders.map((x) => x.targetId));
+  const spaceOnly = space ? s.children(space).filter((f) => !sharedIds.has(f.id)) : [];
   const { folderMenu, dialogs: folderDialogs } = useActions();
   // files dropped on a client's page go straight into their folder
   const dropHere = useCallback(
@@ -530,7 +539,7 @@ function ClientBody({ c, onEdit, onAdd, onNewFolder, onDelete, modals }: { c: Cl
         )}
       </section>
 
-      {(home || inbox) && (
+      {(home || inbox || spaceOnly.length > 0) && (
         <section className="cgroup is-team">
           <header className="cgroup-head">
             <span className="cgroup-badge"><ILock /> Team only</span>
@@ -540,6 +549,9 @@ function ClientBody({ c, onEdit, onAdd, onNewFolder, onDelete, modals }: { c: Cl
           <div className="folders">
             {home && <SharedFolder f={home} note="Working folder" menu={folderMenu(home)} />}
             {inbox && <SharedFolder f={inbox} note={`Uploaded by ${c.name}`} menu={folderMenu(inbox)} />}
+            {spaceOnly.map((f) => (
+              <SharedFolder key={f.id} f={f} note="Not shared yet" menu={folderMenu(f)} />
+            ))}
           </div>
         </section>
       )}
@@ -795,13 +807,16 @@ function PasswordDialog({ email, password, fresh, onClose }: { email: string; pa
 
 function SharedFolder({ f, share, note, menu }: { f: Folder | undefined; share?: Share; note?: string; menu?: MenuItem[] }) {
   const s = useStore();
+  // a client's own folder takes dropped files as shortcuts (no copies)
+  const own = !!f?.parentId && s.clientOfSpace.has(f.parentId);
+  const { over, dropProps } = useLinkDrop(own ? f!.id : null, f ? nameOf(f) : '');
   if (!f) return null;
   const count = (id: string): number => s.assetsIn(id).length + s.children(id).reduce((n, k) => n + count(k.id), 0);
   const trashed = !!f.deletedAt || s.path(f.id).some((x) => x.deletedAt);
   const n = count(f.id);
-  const where = note ?? (s.path(f.parentId).map(nameOf).join(' › ') || 'Library');
+  const where = note ?? (f.parentId && s.clientOfSpace.has(f.parentId) ? 'Client’s own folder' : s.path(f.parentId).map(nameOf).join(' › ') || 'Library');
   return (
-    <div className={`folder shared-folder${trashed || (share && ended(share)) ? ' is-trashed' : ''}`} data-spring={trashed ? undefined : `folder:${f.id}`} tabIndex={0} onClick={() => !trashed && s.go({ page: 'folder', id: f.id })}>
+    <div className={`folder shared-folder${trashed || (share && ended(share)) ? ' is-trashed' : ''}${over ? ' drop-on' : ''}`} data-spring={trashed ? undefined : `folder:${f.id}`} data-link-drop={own ? '' : undefined} {...dropProps} tabIndex={0} onClick={() => !trashed && s.go({ page: 'folder', id: f.id })}>
       <FolderGlyph f={f} />
       <div className="folder-text">
         <strong title={nameOf(f)}>{nameOf(f)}</strong>
@@ -883,29 +898,13 @@ function ClientFolderDialog({ c, onClose }: { c: Client; onClose: () => void }) 
   const [name, setName] = useState('');
   const [share, setShare] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [place, setPlace] = useState<'home' | 'library'>(() => {
-    try {
-      // a brand-new top-level folder unless you've chosen the client's folder before
-      return localStorage.getItem('moonlib.clientFolderPlace') === 'home' ? 'home' : 'library';
-    } catch {
-      return 'library';
-    }
-  });
-  const home = c.homeFolderId ? s.byId.get(c.homeFolderId) : undefined;
-  const where = place === 'library' ? 'Library' : [...(home ? s.path(home.id).map(nameOf) : ['Clients', c.name])].join(' › ');
-  const choose = (v: 'home' | 'library') => {
-    setPlace(v);
-    try {
-      localStorage.setItem('moonlib.clientFolderPlace', v);
-    } catch {
-      /* private mode */
-    }
-  };
+  // a folder made here is the client's own: Clients › <client> › <folder>, kept out of the Library
+  const where = `Clients › ${c.name}`;
   const submit = async () => {
     const v = name.trim();
     if (!v || busy) return;
     setBusy(true);
-    const r = await s.run<{ id: string }>('clients.newFolder', { clientId: c.id, name: v, share, place }, share ? `Created “${v}” and shared it with ${c.name}` : `Created “${v}”`);
+    const r = await s.run<{ id: string }>('clients.newFolder', { clientId: c.id, name: v, share, place: 'client' }, share ? `Created “${v}” and shared it with ${c.name}` : `Created “${v}”`);
     setBusy(false);
     if (r?.id) {
       onClose();
@@ -930,19 +929,6 @@ function ClientFolderDialog({ c, onClose }: { c: Client; onClose: () => void }) 
           <span>Folder name</span>
           <input autoFocus value={name} placeholder="e.g. CNY 2027" onChange={(e) => setName(e.target.value)} />
         </label>
-        <div className="field">
-          <span>Put it in</span>
-          <Segmented
-            label="Where the folder goes"
-            value={place}
-            onChange={choose}
-            options={[
-              { value: 'library', label: 'New top-level folder', title: 'A new folder on its own at the top of the library' },
-              { value: 'home', label: `Inside ${c.name}’s folder`, title: 'Inside this client’s own folder, with their other folders' },
-            ]}
-          />
-          <small>{place === 'library' ? 'A new folder on its own at the top of the library. Only this folder is shared with them.' : 'Kept with the rest of their folders.'}</small>
-        </div>
         <p className="client-folder-where">
           <IFolder /> {where} › <b>{name.trim() || 'New folder'}</b>
         </p>

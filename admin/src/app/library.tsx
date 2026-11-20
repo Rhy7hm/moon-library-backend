@@ -4,6 +4,7 @@ import { fileUrl, mainFile, nameOf, titleOf, type Asset, type Folder, type Tag }
 import { fmtDate, fmtSize, matchesType, typeOf, type TypeFilter } from './format';
 import { AccessDialog } from './access';
 import { FolderLookDialog } from './folder-look';
+import { AddToClientDialog } from './add-to';
 import { canConvert, ConvertDialog } from './convert';
 import { IClock, IDownload, IFolder, IGrid, IImage, IList, ILock, IMove, IPencil, IPin, IPinOff, IPlus, IReplace, ISearch, IShare, ITag, ITrash, IUpload, IX } from './icons';
 import { ClientAvatar, ShareWithClients } from './clients';
@@ -12,7 +13,7 @@ import { sheetOrder, useFileDrop, useStore } from './store';
 import { isEmpty, KIND_LABEL, KIND_QUERY, matches, parse, withFilter, without, type Token } from './search';
 import { TagDialog, tagQuery } from './tags';
 import { applyTagFilter, NO_TAG_FILTER, tagFilterOn, tagStats, TagFilterBar, TagFilterButton, toggleTagId, type TagFilter } from './tag-filter';
-import { AssetBadges, AssetCard, Button, Crumbs, Empty, FolderPicker, FolderTile, PageHeader, PromptDialog, Segmented, Thumb, TypeIcon, draggedFromHere, endDrag, startDrag, useMoveDrop, type MenuItem } from './ui';
+import { AssetBadges, AssetCard, Button, Crumbs, Empty, FolderPicker, FolderTile, PageHeader, PromptDialog, Segmented, Thumb, TypeIcon, draggedFromHere, endDrag, startDrag, useInClientSpace, useLinkDrop, useMoveDrop, type MenuItem } from './ui';
 
 type Sort = 'new' | 'old' | 'name' | 'size';
 type View = 'grid' | 'list';
@@ -67,6 +68,7 @@ type Ask =
   | { kind: 'convert'; assets: Asset[] }
   | { kind: 'access'; folder: Folder }
   | { kind: 'look'; folder: Folder }
+  | { kind: 'addto'; assets: Asset[] }
   | null;
 
 /** The ••• menus for files and folders, and the dialogs they open (also used on the client page). */
@@ -90,6 +92,7 @@ export function useActions() {
           { label: 'Rename', icon: <IPencil />, onClick: () => setAsk({ kind: 'rename-asset', asset: a }) },
           { label: 'Move to…', icon: <IMove />, onClick: () => setAsk({ kind: 'move', itemIds: [a.id], folderIds: [] }) },
           { label: 'Share with client…', icon: <IShare />, onClick: () => setAsk({ kind: 'share', target: 'item', id: a.id, label: titleOf(a) }) },
+          { label: 'Add to client folder…', icon: <IFolder />, onClick: () => setAsk({ kind: 'addto', assets: [a] }) },
           'sep',
           { label: 'Move to Trash', icon: <ITrash />, danger: true, onClick: () => trashAssets([a.id]) },
         ] as MenuItem[])
@@ -156,6 +159,8 @@ export function useActions() {
       />
     ) : ask?.kind === 'share' ? (
       <ShareWithClients kind={ask.target} id={ask.id} ids={ask.ids} label={ask.label} onClose={() => setAsk(null)} />
+    ) : ask?.kind === 'addto' ? (
+      <AddToClientDialog assets={ask.assets} onClose={() => setAsk(null)} />
     ) : ask?.kind === 'look' ? (
       <FolderLookDialog folder={ask.folder} onClose={() => setAsk(null)} />
     ) : ask?.kind === 'access' ? (
@@ -171,9 +176,29 @@ export function useActions() {
 
 /* ---------------- the file grid ---------------- */
 
-function FileGrid({ assets, showWhere, empty, tagFilter = true }: { assets: Asset[]; showWhere?: boolean; empty: React.ReactNode; tagFilter?: boolean }) {
+function FileGrid({ assets, showWhere, empty, tagFilter = true, folderId }: { assets: Asset[]; showWhere?: boolean; empty: React.ReactNode; tagFilter?: boolean; folderId?: string | null }) {
   const s = useStore();
   const { assetMenu, setAsk, trashAssets, dialogs } = useActions();
+  // shortcuts shown in this folder: the files live elsewhere, so "delete" here only takes them out of this folder
+  const linked = s.linkedIn(folderId ?? null);
+  const unlink = (ids: string[]) =>
+    folderId && ids.length
+      ? s.run('links.remove', { folderId, itemIds: ids }, `Took ${ids.length} file${ids.length === 1 ? '' : 's'} out of this folder — the original${ids.length === 1 ? ' stays' : 's stay'} where ${ids.length === 1 ? 'it is' : 'they are'}`, () => s.run('links.add', { folderId, itemIds: ids }))
+      : undefined;
+  const removeAll = (list: Asset[]) => {
+    const own = list.filter((a) => !linked.has(a.id)).map((a) => a.id);
+    const short = list.filter((a) => linked.has(a.id)).map((a) => a.id);
+    if (own.length) trashAssets(own);
+    if (short.length) void unlink(short);
+  };
+  const menuFor = (a: Asset): MenuItem[] =>
+    !linked.has(a.id)
+      ? assetMenu(a)
+      : [
+          ...assetMenu(a).filter((m) => m === 'sep' || !('label' in m) || (m.label !== 'Move to Trash' && m.label !== 'Move to…')),
+          { label: 'Show the original', icon: <IFolder />, onClick: () => s.go({ page: 'folder', id: a.folderId === s.looseFolderId ? null : a.folderId }) },
+          ...(s.canEdit ? ([{ label: 'Remove from this folder', icon: <IX />, danger: true, onClick: () => unlink([a.id]) }] as MenuItem[]) : []),
+        ];
   const [type, setType] = useState<TypeFilter>(() => pref('type', 'all'));
   const [sort, setSort] = useState<Sort>(() => pref('sort', 'new'));
   const [view, setView] = useState<View>(() => pref('view', 'grid'));
@@ -268,7 +293,7 @@ function FileGrid({ assets, showWhere, empty, tagFilter = true }: { assets: Asse
       } else if (e.key === 'Escape' && selected.length) setSel(new Set());
       else if ((e.key === 'Delete' || (e.key === 'Backspace' && (e.metaKey || e.ctrlKey))) && selected.length && canEdit) {
         e.preventDefault();
-        trashAssets(selected.map((a) => a.id));
+        removeAll(selected);
         setSel(new Set());
       }
     };
@@ -276,7 +301,8 @@ function FileGrid({ assets, showWhere, empty, tagFilter = true }: { assets: Asse
     return () => document.removeEventListener('keydown', onKey);
   }, [sheetOpen, canEdit]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const where = (a: Asset) => (showWhere ? s.path(a.folderId).map(nameOf).join(' › ') || 'Library' : undefined);
+  const pathOf = (a: Asset) => s.path(a.folderId).map(nameOf).join(' › ') || 'Library';
+  const where = (a: Asset) => (linked.has(a.id) ? `↪ ${pathOf(a)}` : showWhere ? pathOf(a) : undefined);
   // dragging a selected card takes the whole selection along
   const drag = (a: Asset) => (s.canEdit ? (e: React.DragEvent) => startDrag(e, { items: sel.has(a.id) ? selected.map((x) => x.id) : [a.id], folders: [] }) : undefined);
 
@@ -360,7 +386,7 @@ function FileGrid({ assets, showWhere, empty, tagFilter = true }: { assets: Asse
       ) : view === 'grid' ? (
         <div className={`grid zoom-${zoom}`} key={type + sort}>
           {visible.map((a) => (
-            <AssetCard key={a.id} asset={a} selected={sel.has(a.id)} selecting={sel.size > 0} onToggle={(e) => toggle(a.id, e)} onOpen={() => open(a)} menu={assetMenu(a)} where={where(a)} onDragStart={drag(a)} onTag={tagFilter ? (id) => changeTags(toggleTagId(active, id)) : undefined} activeTags={activeTags} />
+            <AssetCard key={a.id} asset={a} selected={sel.has(a.id)} selecting={sel.size > 0} onToggle={(e) => toggle(a.id, e)} onOpen={() => open(a)} menu={menuFor(a)} where={where(a)} onDragStart={drag(a)} onTag={tagFilter ? (id) => changeTags(toggleTagId(active, id)) : undefined} activeTags={activeTags} />
           ))}
         </div>
       ) : (
@@ -440,12 +466,23 @@ function FileGrid({ assets, showWhere, empty, tagFilter = true }: { assets: Asse
               >
                 Share
               </Button>
-              <Button size="sm" icon={<IMove />} onClick={() => setAsk({ kind: 'move', itemIds: selected.map((a) => a.id), folderIds: [] })}>
-                Move
+              <Button size="sm" icon={<IFolder />} title="Show these in a client's folder too (no copies)" onClick={() => setAsk({ kind: 'addto', assets: selected })}>
+                Add to client
               </Button>
-              <Button size="sm" kind="danger" icon={<ITrash />} onClick={() => (trashAssets(selected.map((a) => a.id)), setSel(new Set()))}>
-                Delete
-              </Button>
+              {selected.some((a) => !linked.has(a.id)) && (
+                <Button size="sm" icon={<IMove />} onClick={() => setAsk({ kind: 'move', itemIds: selected.filter((a) => !linked.has(a.id)).map((a) => a.id), folderIds: [] })}>
+                  Move
+                </Button>
+              )}
+              {selected.every((a) => linked.has(a.id)) ? (
+                <Button size="sm" kind="danger" icon={<IX />} title="The files stay where they are" onClick={() => (removeAll(selected), setSel(new Set()))}>
+                  Remove from folder
+                </Button>
+              ) : (
+                <Button size="sm" kind="danger" icon={<ITrash />} onClick={() => (removeAll(selected), setSel(new Set()))}>
+                  Delete
+                </Button>
+              )}
             </>
           )}
         </div>
@@ -469,7 +506,11 @@ export function FolderPage({ id }: { id: string | null }) {
   const onFiles = useCallback((files: File[]) => files.length && s.upload(files, id), [s, id]);
   const over = useFileDrop(onFiles, s.canEdit);
   // files carried here from another page (rest on a folder and it opens): drop anywhere on the page to move them in
-  const into = useMoveDrop(id, folder ? nameOf(folder) : 'Library');
+  // in a client's own folder, dropped files become shortcuts (they stay where they are); elsewhere they move in
+  const forClient = useInClientSpace(id);
+  const moveIn = useMoveDrop(id, folder ? nameOf(folder) : 'Library');
+  const linkIn = useLinkDrop(forClient ? id : null, folder ? nameOf(folder) : '');
+  const into = forClient ? linkIn : moveIn;
   const takeDrop = into.over && !draggedFromHere();
 
   if (id && (!folder || folder.deletedAt)) {
@@ -478,7 +519,7 @@ export function FolderPage({ id }: { id: string | null }) {
   const count = (f: Folder) => s.children(f.id).length + s.assetsIn(f.id).length;
 
   return (
-    <div className={`page${takeDrop ? ' page-drop' : ''}`} data-drop-label={takeDrop ? `Drop to move into “${folder ? nameOf(folder) : 'Library'}”` : undefined} {...into.dropProps}>
+    <div className={`page${takeDrop ? ' page-drop' : ''}`} data-drop-label={takeDrop ? (forClient ? `Drop to add to “${folder ? nameOf(folder) : ''}” — no copies` : `Drop to move into “${folder ? nameOf(folder) : 'Library'}”`) : undefined} {...into.dropProps}>
       <PageHeader
         title={folder ? nameOf(folder) : 'Library'}
         sub={folder ? `${sub.length ? `${sub.length} ${sub.length === 1 ? 'folder' : 'folders'} · ` : ''}${assets.length} ${assets.length === 1 ? 'file' : 'files'} · ${fmtSize(assets.reduce((n, a) => n + (mainFile(a)?.size ?? 0), 0))}` : s.canEdit ? 'Drop files anywhere to add them. Drag files onto a folder to sort them.' : 'All your folders and files.'}
@@ -541,6 +582,7 @@ export function FolderPage({ id }: { id: string | null }) {
           {sub.length > 0 && (assets.length > 0 || !id) && <h2 className="section-title">Files</h2>}
           <FileGrid
             assets={assets}
+            folderId={id}
             empty={
               id || !sub.length ? (
                 <div className={`dropzone${s.canEdit ? '' : ' off'}`} onClick={() => s.canEdit && input.current?.click()}>

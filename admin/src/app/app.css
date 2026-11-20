@@ -1609,3 +1609,12 @@ body.no-select, body.no-select * { -webkit-user-select: none; user-select: none;
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .is-shared .cgroup-badge { color: #5fd97f; } }
 :root[data-theme="dark"] .is-shared .cgroup-badge { color: #5fd97f; }
 @media (max-width: 600px) { .cgroup { padding: 14px 12px 4px; } .cgroup-head { grid-template-columns: 1fr; } .cgroup-head .btn { grid-column: 1; grid-row: auto; justify-self: start; margin-top: 6px; } }
+
+/* ---- add to a client's folder (shortcuts) ---- */
+.addto-note { margin: 0 0 14px; font-size: 13px; line-height: 1.45; }
+.addto { display: flex; flex-direction: column; gap: 14px; max-height: 52vh; overflow-y: auto; margin: 0 -8px; padding: 0 8px; }
+.addto-head { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; font-size: 13px; }
+.addto-row { width: 100%; padding-left: 8px; }
+.addto-row .glyph { flex: none; }
+.addto-empty { display: flex; align-items: center; gap: 6px; margin: 2px 0 0 4px; font-size: 12.5px; }
+.addto-empty svg { width: 14px; height: 14px; }

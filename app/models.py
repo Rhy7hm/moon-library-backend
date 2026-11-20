@@ -354,7 +354,20 @@ folder_access = Table(
     **TABLE_ARGS,
 )
 
+item_links = Table(
+    "item_links",
+    metadata,
+    Column("folder_id", VARCHAR(64, collation=BIN), nullable=False),
+    Column("item_id", VARCHAR(64, collation=BIN), nullable=False),
+    Column("created_at", BigInteger, nullable=False),
+    Column("created_by", VARCHAR(100), nullable=True),
+    PrimaryKeyConstraint("folder_id", "item_id"),
+    Index("item_links_item", "item_id"),
+    **TABLE_ARGS,
+)
+
 ALL_TABLES = [
+    "item_links",
     "folder_access",
     "item_tags",
     "tags",
