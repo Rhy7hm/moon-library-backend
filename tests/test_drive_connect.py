@@ -67,7 +67,8 @@ def test_connect_back_up_and_disconnect(app, owner, gdrive):
     assert len(made) == 1 and made[0]["driveId"] is None
     # the token is stored encrypted
     stored = sql(app, "SELECT value FROM settings WHERE `key` = 'gdrive.oauth'")[0]["value"]
-    assert "r-" not in stored and "moon@example.com" not in stored
+    # (look for the whole refresh token: the encrypted text is random and can contain "r-" by chance)
+    assert gdrive.refresh and not any(rt in stored for rt in gdrive.refresh) and "moon@example.com" not in stored
     d = drive_check(owner)
     assert d["state"] == "ok" and d["connected"] is True and d["account"] == "moon@example.com"
     facts = {f["label"]: f["value"] for f in d["facts"]}

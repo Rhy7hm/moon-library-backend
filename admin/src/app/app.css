@@ -1618,3 +1618,9 @@ body.no-select, body.no-select * { -webkit-user-select: none; user-select: none;
 .addto-row .glyph { flex: none; }
 .addto-empty { display: flex; align-items: center; gap: 6px; margin: 2px 0 0 4px; font-size: 12.5px; }
 .addto-empty svg { width: 14px; height: 14px; }
+
+/* ---- videos without a preview ---- */
+.still-note { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; padding: 10px 12px 10px 14px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); font-size: 13px; color: var(--ink-2); }
+.still-note > svg { flex: none; width: 18px; height: 18px; color: var(--accent); }
+.still-note > span { flex: 1; min-width: 0; }
+@media (max-width: 600px) { .still-note { flex-wrap: wrap; } .still-note .btn { margin-left: 28px; } }

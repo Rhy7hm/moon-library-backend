@@ -5,6 +5,7 @@ import { fmtDate, fmtSize, matchesType, typeOf, type TypeFilter } from './format
 import { AccessDialog } from './access';
 import { FolderLookDialog } from './folder-look';
 import { AddToClientDialog } from './add-to';
+import { makeStills, missingStill } from './posters';
 import { canConvert, ConvertDialog } from './convert';
 import { IClock, IDownload, IFolder, IGrid, IImage, IList, ILock, IMove, IPencil, IPin, IPinOff, IPlus, IReplace, ISearch, IShare, ITag, ITrash, IUpload, IX } from './icons';
 import { ClientAvatar, ShareWithClients } from './clients';
@@ -301,6 +302,19 @@ function FileGrid({ assets, showWhere, empty, tagFilter = true, folderId }: { as
     return () => document.removeEventListener('keydown', onKey);
   }, [sheetOpen, canEdit]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // videos whose upload couldn't make a preview: make them here, from the stored videos
+  const noStill = useMemo(() => missingStill(assets), [assets]);
+  const [stills, setStills] = useState<{ done: number; of: number } | null>(null);
+  const fixStills = async () => {
+    if (stills) return;
+    setStills({ done: 0, of: noStill.length });
+    const r = await makeStills(noStill, (done, of) => setStills({ done, of }));
+    setStills(null);
+    await s.reload();
+    if (r.failed && !r.made) s.toast(`This browser couldn’t read ${r.failed === 1 ? 'that video' : `those ${r.failed} videos`}. Try once in Safari, which plays more video formats.`, { tone: 'err' });
+    else if (r.failed) s.toast(`Made ${r.made} previews. ${r.failed} video${r.failed === 1 ? '' : 's'} couldn’t be read by this browser — try Safari for ${r.failed === 1 ? 'it' : 'those'}.`, { tone: 'err' });
+    else s.toast(`Made ${r.made} preview${r.made === 1 ? '' : 's'}`, { tone: 'ok' });
+  };
   const pathOf = (a: Asset) => s.path(a.folderId).map(nameOf).join(' › ') || 'Library';
   const where = (a: Asset) => (linked.has(a.id) ? `↪ ${pathOf(a)}` : showWhere ? pathOf(a) : undefined);
   // dragging a selected card takes the whole selection along
@@ -361,6 +375,20 @@ function FileGrid({ assets, showWhere, empty, tagFilter = true, folderId }: { as
               ]}
             />
           </div>
+        </div>
+      )}
+
+      {noStill.length > 0 && s.canEdit && (
+        <div className="still-note" role="status">
+          <IImage />
+          <span>
+            {stills
+              ? `Making previews… ${stills.done} of ${stills.of}`
+              : `${noStill.length} video${noStill.length === 1 ? ' has' : 's have'} no preview yet. They can be made from the stored ${noStill.length === 1 ? 'video' : 'videos'}.`}
+          </span>
+          <Button size="sm" kind="primary" disabled={!!stills} onClick={fixStills}>
+            {stills ? 'Working…' : 'Make previews'}
+          </Button>
         </div>
       )}
 

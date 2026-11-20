@@ -109,43 +109,85 @@ export async function deriveImage(file: Blob, cover?: Blob): Promise<Derived> {
   return { width: w, height: h, thumb, opt, optMime: opt ? 'image/jpeg' : null, focusY };
 }
 
-export function deriveVideo(file: Blob): Promise<Derived> {
+/**
+ * A still (and the size and length) of a video, from a file being uploaded or one already stored (by its URL).
+ * One video at a time: opening many big videos at once makes the browser give up on some of them, which is how a
+ * large batch used to end up with videos that have no preview. If no frame can be drawn (a format this browser
+ * can't play), the size and length are still kept when the browser could read them.
+ */
+export function deriveVideo(src: Blob | string): Promise<Derived> {
+  const run = videoQueue.then(() => videoStill(src));
+  videoQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+let videoQueue: Promise<void> = Promise.resolve();
+
+/** Is this picture all one colour (a black frame the browser failed to decode)? Checks a grid of points. */
+function blank(ctx: CanvasRenderingContext2D, w: number, h: number) {
+  const d = ctx.getImageData(0, 0, w, h).data;
+  const step = Math.max(4, Math.floor(d.length / 4 / 400)) * 4;
+  const r0 = d[0], g0 = d[1], b0 = d[2];
+  for (let i = step; i < d.length; i += step) if (Math.abs(d[i] - r0) + Math.abs(d[i + 1] - g0) + Math.abs(d[i + 2] - b0) > 24) return false;
+  return true;
+}
+
+function videoStill(src: Blob | string): Promise<Derived> {
   return new Promise((resolve) => {
-    const url = URL.createObjectURL(file);
+    const url = typeof src === 'string' ? src : URL.createObjectURL(src);
     const v = document.createElement('video');
     v.muted = true;
     v.playsInline = true;
     v.preload = 'auto';
     let settled = false;
+    let meta: Derived = {};
     const done = (d: Derived) => {
       if (settled) return;
       settled = true;
-      URL.revokeObjectURL(url);
+      clearTimeout(timer);
+      if (typeof src !== 'string') URL.revokeObjectURL(url);
       v.removeAttribute('src');
       v.load();
       resolve(d);
     };
-    const timer = setTimeout(() => done({}), 20000);
-    v.onloadedmetadata = () => {
-      v.currentTime = Math.min(1, (v.duration || 3) / 3);
-    };
-    v.onseeked = async () => {
-      clearTimeout(timer);
+    const timer = setTimeout(() => done(meta), 45000);
+    // Some videos (often H.265 / HEVC) decode to a black picture the first time they're drawn. A frame that's all
+    // one colour is tried again after the video plays for a moment; if it's still blank, no still is saved (a
+    // black preview would be worse than none).
+    const draw = () => {
       const w = v.videoWidth;
       const h = v.videoHeight;
-      let poster: Blob | null = null;
-      if (w && h) {
-        const pw = Math.min(w, THUMB_W);
-        const c = canvas(pw, Math.round((h * pw) / w));
-        c.getContext('2d')!.drawImage(v, 0, 0, c.width, c.height);
-        poster = await toBlob(c, 'image/webp', 0.8);
+      if (!w || !h) return null;
+      const pw = Math.min(w, THUMB_W);
+      const c = canvas(pw, Math.round((h * pw) / w));
+      const ctx = c.getContext('2d', { willReadFrequently: true }) as CanvasRenderingContext2D;
+      ctx.drawImage(v, 0, 0, c.width, c.height);
+      return blank(ctx, c.width, c.height) ? null : c;
+    };
+    const grab = async () => {
+      let c: HTMLCanvasElement | OffscreenCanvas | null = null;
+      for (let tries = 0; tries < 3 && !c && !settled; tries++) {
+        try {
+          if (tries) {
+            await v.play().catch(() => undefined);
+            await new Promise((r) => setTimeout(r, 350 * tries));
+            v.pause();
+          }
+          c = draw();
+        } catch {
+          c = null;
+        }
       }
-      done({ width: w || null, height: h || null, duration: isFinite(v.duration) ? v.duration : null, poster });
+      done({ ...meta, poster: c ? await toBlob(c, 'image/webp', 0.8) : null });
     };
-    v.onerror = () => {
-      clearTimeout(timer);
-      done({});
+    v.onloadedmetadata = () => {
+      meta = { width: v.videoWidth || null, height: v.videoHeight || null, duration: isFinite(v.duration) ? v.duration : null };
+      v.currentTime = Math.min(1, (v.duration || 3) / 3);
     };
+    v.onseeked = () => void grab();
+    v.onerror = () => done(meta);
     v.src = url;
   });
 }

@@ -295,3 +295,21 @@ def test_copy_paste_and_duplicate(owner, client):
     op(owner, "audit.undo", {"id": log[0]["id"]})
     op(owner, "purge", {"all": True})
     assert client.get(f"/f/{ka['orig']}").data == PNG and client.get(f"/f/{kb['orig']}").status_code == 200
+
+
+def test_a_video_gets_its_still_later(owner):
+    from tests.conftest import folder, item, op, upload
+
+    i = item(owner, folder(owner))
+    vid, keys, _ = upload(owner, i, "clip.mp4", b"\x00\x00\x00\x18ftypmp42" + b"v" * 400, mime="video/mp4", kind="video")
+    r = op(owner, "file.setposter", {"id": vid, "width": 3840, "height": 2160, "duration": 12.5})
+    assert r["key"].startswith("p/") and r["key"].endswith(".webp")
+    assert owner.put("/api/admin/upload", query_string={"key": r["key"], "contentType": "image/webp"}, data=b"RIFF0000WEBPxxxx").status_code == 200
+    v = owner.get("/api/admin/tree").get_json()["items"][0]["variants"][0]
+    # the size it already had stays; the missing length is filled in
+    assert v["poster"] == r["key"] and (v["w"], v["h"], v["dur"]) == (10, 20, 12.5)
+    assert owner.get(f"/f/{r['key']}").status_code == 200
+    # pictures use a cover instead
+    pic = item(owner, folder(owner, "P"))
+    pid, _, _ = upload(owner, pic, "a.png", b"\x89PNG\r\n\x1a\n" + b"p" * 300)
+    op(owner, "file.setposter", {"id": pid}, status=400)

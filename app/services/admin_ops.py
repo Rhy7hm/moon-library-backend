@@ -646,6 +646,26 @@ def file_setthumb(ctx: Ctx, b: Body):
     return {"key": key}
 
 
+def file_setposter(ctx: Ctx, b: Body):
+    """A new still for a video made after it was uploaded (for one whose upload couldn't make one); also fills in
+    its size and length if those are missing. Returns the key to upload the WEBP picture to."""
+    fid = _str(b.get("id"), "id")
+    row = q.first("SELECT key_poster, kind, width, height, duration FROM files WHERE id = ?", fid)
+    if not row:
+        raise HttpError(404, "File not found")
+    if row["kind"] != "video":
+        raise HttpError(400, "Only videos have a still")
+    key = f"p/{fid}{new_id(4)}.webp"
+    if row["key_poster"] and not q.first("SELECT 1 AS x FROM file_versions WHERE key_poster = ?", row["key_poster"]):
+        delete_storage([row["key_poster"]])
+    w, h, d = _int_or_none(b.get("width")), _int_or_none(b.get("height")), _num(b.get("duration"))
+    q.run(
+        "UPDATE files SET key_poster = ?, width = COALESCE(width, ?), height = COALESCE(height, ?), duration = COALESCE(duration, ?), updated_at = ? WHERE id = ?",
+        key, w if w and w > 0 else None, h if h and h > 0 else None, d if d and d > 0 else None, now(), fid,
+    )
+    return {"key": key}
+
+
 def file_clearopt(ctx: Ctx, b: Body):
     fid = _str(b.get("id"), "id")
     row = q.first("SELECT key_opt FROM files WHERE id = ?", fid)
@@ -1175,6 +1195,7 @@ OPS: dict[str, Callable[[Ctx, Body], Any]] = {
     "file.update": file_update,
     "file.setopt": file_setopt,
     "file.setthumb": file_setthumb,
+    "file.setposter": file_setposter,
     "file.clearopt": file_clearopt,
     "file.delete": file_delete,
     "versions.restore": versions_restore,
