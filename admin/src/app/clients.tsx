@@ -885,9 +885,10 @@ function ClientFolderDialog({ c, onClose }: { c: Client; onClose: () => void }) 
   const [busy, setBusy] = useState(false);
   const [place, setPlace] = useState<'home' | 'library'>(() => {
     try {
-      return localStorage.getItem('moonlib.clientFolderPlace') === 'library' ? 'library' : 'home';
+      // a brand-new top-level folder unless you've chosen the client's folder before
+      return localStorage.getItem('moonlib.clientFolderPlace') === 'home' ? 'home' : 'library';
     } catch {
-      return 'home';
+      return 'library';
     }
   });
   const home = c.homeFolderId ? s.byId.get(c.homeFolderId) : undefined;
@@ -936,8 +937,8 @@ function ClientFolderDialog({ c, onClose }: { c: Client; onClose: () => void }) 
             value={place}
             onChange={choose}
             options={[
-              { value: 'home', label: `${c.name}’s folder`, title: 'Inside this client’s own folder, with their other folders' },
-              { value: 'library', label: 'The library', title: 'A new top-level folder, on its own' },
+              { value: 'library', label: 'New top-level folder', title: 'A new folder on its own at the top of the library' },
+              { value: 'home', label: `Inside ${c.name}’s folder`, title: 'Inside this client’s own folder, with their other folders' },
             ]}
           />
           <small>{place === 'library' ? 'A new folder on its own at the top of the library. Only this folder is shared with them.' : 'Kept with the rest of their folders.'}</small>
