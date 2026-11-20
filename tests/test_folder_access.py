@@ -145,14 +145,25 @@ def test_a_folder_shared_with_a_client_is_for_owners_only(owner, app):
     assert next(f for f in tree(owner)["folders"] if f["id"] == mine)["access"] == [ed]
 
 
-def test_an_editor_who_shares_a_folder_keeps_seeing_it(owner, app):
-    mkt, mc = sign_in(app, "marketer", "editor")
-    _, dc = sign_in(app, "designer", "editor")
-    f = folder(mc, "For client")
+def test_designers_dont_see_or_touch_clients(owner, app):
+    """Clients are the Owners' (marketing's) work: Editors and Viewers get no clients and can't share."""
+    _, ec = sign_in(app, "designer", "editor")
+    f = folder(ec, "Designs")
+    i = item(ec, f, "Poster")
     cid = op(owner, "clients.create", {"name": "Acme"})["id"]
-    op(mc, "shares.add", {"clientId": cid, "folderIds": [f]})
-    assert f in {x["id"] for x in tree(mc)["folders"]}
-    assert f not in {x["id"] for x in tree(dc)["folders"]}
+    assert op(ec, "clients.list")["clients"] == []
+    assert len(op(owner, "clients.list")["clients"]) == 1
+    for name, body in [
+        ("clients.create", {"name": "Nope"}),
+        ("clients.update", {"id": cid, "name": "x"}),
+        ("clients.newFolder", {"clientId": cid, "name": "x"}),
+        ("clients.home", {"clientId": cid}),
+        ("shares.add", {"clientId": cid, "folderIds": [f]}),
+        ("shares.remove", {"clientId": cid, "ids": ["x"]}),
+        ("logins.create", {"clientId": cid, "email": "a@b.co", "name": "A"}),
+        ("links.add", {"folderId": f, "itemIds": [i]}),
+    ]:
+        op(ec, name, body, status=403)
 
 
 def test_command_limits_folders_that_were_already_shared(owner, app):

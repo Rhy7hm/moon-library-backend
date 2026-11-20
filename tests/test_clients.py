@@ -83,10 +83,12 @@ def test_roles(owner, app):
     viewer, editor = app.test_client(), app.test_client()
     login(viewer, "viewer1")
     login(editor, "editor1")
-    assert op(viewer, "clients.list")["clients"][0]["name"] == "Acme"
+    # clients are the Owners' (marketing's) work: Editors and Viewers see none and can't share
+    assert op(viewer, "clients.list")["clients"] == [] and op(editor, "clients.list")["clients"] == []
     op(viewer, "clients.create", {"name": "Nope"}, status=403)
     op(viewer, "shares.add", {"clientId": cid, "links": [{"url": "https://example.com"}]}, status=403)
-    op(editor, "shares.add", {"clientId": cid, "links": [{"url": "https://example.com"}]})
+    op(editor, "shares.add", {"clientId": cid, "links": [{"url": "https://example.com"}]}, status=403)
+    op(owner, "shares.add", {"clientId": cid, "links": [{"url": "https://example.com"}]})
     op(editor, "clients.delete", {"id": cid}, status=403)
     op(owner, "clients.delete", {"id": cid})
     assert app.test_client().post("/api/admin/clients.list", json={}).status_code == 401

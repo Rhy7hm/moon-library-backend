@@ -32,8 +32,14 @@ NEED = {
     "reports.team": "viewer",
     "reports.storage": "viewer",
     "settings.get": "viewer",
-    "clients.list": "viewer",
+    "clients.list": "viewer",  # Editors and Viewers get an empty list: clients are the Owners' (marketing's) work
     "clients.delete": "owner",
+    # clients, sharing with them, their logins and their folders: Owners only (designers don't see clients at all)
+    **{op: "owner" for op in (
+        "clients.create", "clients.update", "clients.setAvatar", "clients.clearAvatar", "clients.newFolder", "clients.home",
+        "shares.add", "shares.expire", "shares.remove", "logins.create", "logins.reset", "logins.update", "logins.delete",
+        "links.add", "links.remove",
+    )},
 }
 
 QUIET = {

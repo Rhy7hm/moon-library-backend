@@ -224,6 +224,8 @@ def clients_new_folder(user: SessionUser, b: dict):
 
 
 def clients_list(user: SessionUser, b: dict):
+    if not at_least(user.role, "owner"):  # designers (Editors, Viewers) don't see clients
+        return {"clients": []}
     if at_least(user.role, "editor"):  # clients added before home folders existed get one
         for r in q.all("SELECT id FROM clients WHERE home_folder_id IS NULL AND deleted_at IS NULL"):
             ensure_home(r["id"], user.username)

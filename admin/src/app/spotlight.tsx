@@ -67,7 +67,7 @@ export function Spotlight({ open, onClose, onUpload }: { open: boolean; onClose:
       { key: 'a:home', group: 'Actions', title: 'Home', icon: <IHome />, run: go({ page: 'home' }) },
       { key: 'a:library', group: 'Actions', title: 'Library', icon: <IFolder />, run: go({ page: 'folder', id: null }) },
       { key: 'a:recent', group: 'Actions', title: 'Recent uploads', icon: <IClock />, run: go({ page: 'recent' }) },
-      { key: 'a:clients', group: 'Actions', title: 'Clients', icon: <IBriefcase />, run: go({ page: 'clients' }) },
+      ...(s.isOwner ? [{ key: 'a:clients', group: 'Actions', title: 'Clients', icon: <IBriefcase />, run: go({ page: 'clients' }) }] : []),
       { key: 'a:trash', group: 'Actions', title: 'Trash', icon: <ITrash />, run: go({ page: 'trash' }) },
       { key: 'a:insights', group: 'Actions', title: 'Insights', sub: 'Storage and file types', icon: <IChart />, run: go({ page: 'insights' }) },
       { key: 'a:activity', group: 'Actions', title: 'Activity', sub: 'Who changed what', icon: <IPulse />, run: go({ page: 'activity' }) },

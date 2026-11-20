@@ -18,7 +18,7 @@ import { startFx } from './fx';
 import { startSpring } from './spring';
 import { gsap, pop, settle } from './motion';
 import { useTheme } from './theme';
-import { MenuButton, Toasts, UploadTray, UserAvatar, useMoveDrop } from './ui';
+import { Button, Empty, MenuButton, Toasts, UploadTray, UserAvatar, useMoveDrop } from './ui';
 
 function NavItem({ icon, label, active, onClick, count }: { icon: ReactNode; label: string; active: boolean; onClick: () => void; count?: number }) {
   return (
@@ -223,6 +223,11 @@ function Pinned({ current }: { current: string | null }) {
 }
 
 function Page({ route }: { route: Route }) {
+  const s = useStore();
+  // clients are the Owners' (marketing's) work: designers don't get the Clients pages
+  if ((route.page === 'clients' || route.page === 'client') && !s.isOwner) {
+    return <Empty icon={<IBriefcase />} title="Clients are managed by the Owners" text="Sharing with clients is done by the marketing team." action={<Button onClick={() => s.go({ page: 'home' })}>Go to Home</Button>} />;
+  }
   switch (route.page) {
     case 'home':
       return <HomePage />;
@@ -336,7 +341,7 @@ export function Shell({ onSignedOut }: { onSignedOut: () => void }) {
           <NavMain src="home" icon={<IHome />} label="Home" active={r.page === 'home'} onClick={nav({ page: 'home' })} />
           <NavMain src="collection" icon={<IFolder />} label="Library" active={r.page === 'folder' && !r.id} onClick={nav({ page: 'folder', id: null })} spring="folder:" />
           <NavMain src="recent" icon={<IClock />} label="Recent" active={r.page === 'recent'} onClick={nav({ page: 'recent' })} />
-          <NavMain src="clients" icon={<IBriefcase />} label="Clients" active={r.page === 'clients' || r.page === 'client'} onClick={nav({ page: 'clients' })} count={s.clients.length} spring="clients" />
+          {s.isOwner && <NavMain src="clients" icon={<IBriefcase />} label="Clients" active={r.page === 'clients' || r.page === 'client'} onClick={nav({ page: 'clients' })} count={s.clients.length} spring="clients" />}
           <NavMain src="trash" icon={<ITrash />} label="Trash" active={r.page === 'trash'} onClick={nav({ page: 'trash' })} count={s.trashAssets.length + s.trashFolders.length} />
         </nav>
         <Pinned current={current} />

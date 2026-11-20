@@ -92,8 +92,12 @@ export function useActions() {
           'sep',
           { label: 'Rename', icon: <IPencil />, onClick: () => setAsk({ kind: 'rename-asset', asset: a }) },
           { label: 'Move to…', icon: <IMove />, onClick: () => setAsk({ kind: 'move', itemIds: [a.id], folderIds: [] }) },
-          { label: 'Share with client…', icon: <IShare />, onClick: () => setAsk({ kind: 'share', target: 'item', id: a.id, label: titleOf(a) }) },
-          { label: 'Add to client folder…', icon: <IFolder />, onClick: () => setAsk({ kind: 'addto', assets: [a] }) },
+          ...(s.isOwner
+            ? ([
+                { label: 'Share with client…', icon: <IShare />, onClick: () => setAsk({ kind: 'share', target: 'item', id: a.id, label: titleOf(a) }) },
+                { label: 'Add to client folder…', icon: <IFolder />, onClick: () => setAsk({ kind: 'addto', assets: [a] }) },
+              ] as MenuItem[])
+            : []),
           'sep',
           { label: 'Move to Trash', icon: <ITrash />, danger: true, onClick: () => trashAssets([a.id]) },
         ] as MenuItem[])
@@ -112,7 +116,7 @@ export function useActions() {
           { label: 'Rename', icon: <IPencil />, onClick: () => setAsk({ kind: 'rename-folder', folder: f }) },
           { label: 'Colour & logo…', icon: <IImage />, onClick: () => setAsk({ kind: 'look', folder: f }) },
           { label: 'Move to…', icon: <IMove />, onClick: () => setAsk({ kind: 'move', itemIds: [], folderIds: [f.id] }) },
-          { label: 'Share with client…', icon: <IShare />, onClick: () => setAsk({ kind: 'share', target: 'folder', id: f.id, label: nameOf(f) }) },
+          ...(s.isOwner ? ([{ label: 'Share with client…', icon: <IShare />, onClick: () => setAsk({ kind: 'share', target: 'folder', id: f.id, label: nameOf(f) }) }] as MenuItem[]) : []),
           ...(s.isOwner ? ([{ label: f.restricted ? 'Who can open… (limited)' : 'Who can open…', icon: <ILock />, onClick: () => setAsk({ kind: 'access', folder: f }) }] as MenuItem[]) : []),
           'sep',
           { label: 'Move to Trash', icon: <ITrash />, danger: true, onClick: () => trashFolder(f) },
@@ -487,6 +491,8 @@ function FileGrid({ assets, showWhere, empty, tagFilter = true, folderId }: { as
               <Button size="sm" icon={<ITag />} onClick={() => setAsk({ kind: 'tag', itemIds: selected.map((a) => a.id) })}>
                 Tag
               </Button>
+              {s.isOwner && (
+                <>
               <Button
                 size="sm"
                 icon={<IShare />}
@@ -497,6 +503,8 @@ function FileGrid({ assets, showWhere, empty, tagFilter = true, folderId }: { as
               <Button size="sm" icon={<IFolder />} title="Show these in a client's folder too (no copies)" onClick={() => setAsk({ kind: 'addto', assets: selected })}>
                 Add to client
               </Button>
+                </>
+              )}
               {selected.some((a) => !linked.has(a.id)) && (
                 <Button size="sm" icon={<IMove />} onClick={() => setAsk({ kind: 'move', itemIds: selected.filter((a) => !linked.has(a.id)).map((a) => a.id), folderIds: [] })}>
                   Move
@@ -559,7 +567,7 @@ export function FolderPage({ id }: { id: string | null }) {
                   ZIP
                 </Button>
               )}
-              {s.canEdit && id && folder && (
+              {s.isOwner && id && folder && (
                 <Button icon={<IShare />} onClick={() => setAsk({ kind: 'share', target: 'folder', id, label: nameOf(folder) })}>
                   Share
                 </Button>

@@ -21,7 +21,7 @@ const NEW = '__new__';
 
 export function UploadToDialog({ files, tab: firstTab = 'library', onClose }: { files: File[]; tab?: Tab; onClose: () => void }) {
   const s = useStore();
-  const [tab, setTab] = useState<Tab>(firstTab);
+  const [tab, setTab] = useState<Tab>(firstTab === 'client' && !s.isOwner ? 'library' : firstTab);
   // Library
   const [libNew, setLibNew] = useState(false);
   const [libName, setLibName] = useState('');
@@ -144,7 +144,7 @@ export function UploadToDialog({ files, tab: firstTab = 'library', onClose }: { 
           options={[
             { value: 'library', label: 'Library' },
             { value: 'folder', label: 'A folder' },
-            { value: 'client', label: 'A client' },
+            ...(s.isOwner ? [{ value: 'client' as const, label: 'A client' }] : []),
           ]}
         />
 

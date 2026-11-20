@@ -172,7 +172,7 @@ export function AssetSheet() {
                 <Button icon={<IMove />} onClick={() => setMoving(true)}>
                   Move
                 </Button>
-                <Button icon={<IShare />} aria-label="Share with client" title="Share with client" onClick={() => setSharing(true)} />
+                {s.isOwner && <Button icon={<IShare />} aria-label="Share with client" title="Share with client" onClick={() => setSharing(true)} />}
                 <Button
                   kind="danger"
                   icon={<ITrash />}
